@@ -1,0 +1,13 @@
+@"
+credentials.json
+token_gmail.json
+token_calendar.json
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.db
+chroma_db/
+.idea/
+"@ | Set-Content -Path .gitignore -Encoding utf8
