@@ -1,155 +1,89 @@
-import os
 import base64
-import re
-import mimetypes
-from email.message import EmailMessage
-
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from email.mime.text import MIMEText
 from googleapiclient.discovery import build
 
-# --- CONFIGURAZIONE PERCORSI ---
-CURRENT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CREDENTIALS_PATH = os.path.join(CURRENT_DIR, 'credentials.json')
-TOKEN_PATH = os.path.join(CURRENT_DIR, 'token_gmail.json')
-
-SCOPES = ['https://www.googleapis.com/auth/gmail.modify']
-
-EMAIL_AZIENDALE = "provaaa6767@gmail.com"
-
-PAROLE_CHIAVE_OGGETTO = ["richiesta", "informazioni", "preventivo", "assistenza", "fattura"]
+from src.core.google_auth import ottieni_credenziali_utente
 
 
-def autentica_gmail():
-    """Gestisce il login Google. Apre il browser se il token è mancante o scaduto."""
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(CREDENTIALS_PATH):
-                raise FileNotFoundError(f"Impossibile trovare {CREDENTIALS_PATH}. Scaricalo da Google Cloud.")
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, 'w') as token:
-            token.write(creds.to_json())
-
-    service = build('gmail', 'v1', credentials=creds)
-    profilo = service.users().getProfile(userId='me').execute()
-    print(f"📧 [GMAIL ATTIVA]: {profilo.get('emailAddress')}")
-    return service
+def _ottieni_servizio_gmail(username: str = "admin"):
+    creds = ottieni_credenziali_utente(username)
+    return build("gmail", "v1", credentials=creds)
 
 
-def invia_email(destinatario: str, oggetto: str, corpo: str, allegato_path: str = None):
-    """Invia un'email testuale dall'account autenticato, opzionalmente con un file allegato."""
-    print(f"📤 [INVIA_EMAIL] Da: {EMAIL_AZIENDALE} -> A: {destinatario} | Oggetto: {oggetto}")
-    try:
-        service = autentica_gmail()
-        message = EmailMessage()
-        message.set_content(corpo)
-        message['From'] = EMAIL_AZIENDALE
-        message['To'] = destinatario
-        message['Subject'] = oggetto
+def _estrai_testo_email(payload: dict, snippet: str = "") -> str:
+    """Estrae il corpo testuale (text/plain) dal payload Gmail, con fallback sullo snippet."""
+    if payload.get("mimeType") == "text/plain" and payload.get("body", {}).get("data"):
+        data = payload["body"]["data"]
+        return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace").strip()
 
-        if allegato_path and os.path.exists(allegato_path):
-            ctype, encoding = mimetypes.guess_type(allegato_path)
-            if ctype is None or encoding is not None:
-                ctype = 'application/octet-stream'
-            maintype, subtype = ctype.split('/', 1)
+    for part in payload.get("parts", []):
+        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+            data = part["body"]["data"]
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace").strip()
 
-            with open(allegato_path, 'rb') as f:
-                dati_file = f.read()
-
-            message.add_attachment(
-                dati_file,
-                maintype=maintype,
-                subtype=subtype,
-                filename=os.path.basename(allegato_path)
-            )
-
-        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        send_message = service.users().messages().send(
-            userId="me",
-            body={'raw': encoded_message}
-        ).execute()
-
-        if allegato_path and os.path.exists(allegato_path):
-            os.remove(allegato_path)
-
-        print(f"✅ [INVIA_EMAIL] Inviata con successo! ID: {send_message['id']}")
-        return f"Email inviata con successo! ID: {send_message['id']}"
-    except Exception as e:
-        print(f"❌ [INVIA_EMAIL ERRORE]: {e}")
-        return f"Errore durante l'invio dell'email: {e}"
-
-def _decodifica_b64(data_b64: str) -> str:
-    data_b64 += "=" * ((4 - len(data_b64) % 4) % 4)
-    try:
-        return base64.urlsafe_b64decode(data_b64).decode('utf-8', errors='replace')
-    except Exception as e:
-        return f"[Errore di decodifica: {e}]"
+    return snippet
 
 
-def _estrai_corpo_ricorsivo(payload: dict) -> str:
-    """Estrae il testo plain anche da email multipart annidate."""
-    mime_type = payload.get('mimeType', '')
-    body_data = payload.get('body', {}).get('data')
-
-    if mime_type == 'text/plain' and body_data:
-        return _decodifica_b64(body_data)
-
-    if 'parts' in payload:
-        for part in payload['parts']:
-            testo = _estrai_corpo_ricorsivo(part)
-            if testo:
-                return testo
-
-    # Fallback se l'email ha solo un body diretto senza parts
-    if body_data:
-        return _decodifica_b64(body_data)
-
-    return ""
-
-def leggi_email_non_lette(limite: int = 10) -> list[dict]:
-    """Legge solo le email in Posta in Arrivo il cui oggetto contiene le parole chiave consentite."""
-    servizio = autentica_gmail()
-
-    # Costruisce la query Gmail: es. subject:(richiesta OR informazioni)
-    query_filtro = f"subject:({' OR '.join(PAROLE_CHIAVE_OGGETTO)})"
-
-    risultati = servizio.users().messages().list(
-        userId='me',
-        labelIds=['INBOX'],
-        q=query_filtro,
-        maxResults=limite
-    ).execute()
-    messaggi = risultati.get('messages', [])
-
-    email_trovate = []
+def leggi_tutte_le_email(username: str = "admin", limite: int = 10) -> list[dict]:
+    """Scarica le ultime email dell'utente specificato marcando quelle in arrivo e non lette."""
+    service = _ottieni_servizio_gmail(username)
+    risultati = service.users().messages().list(userId="me", maxResults=limite).execute()
+    messaggi = risultati.get("messages", [])
+    email_lista = []
 
     for msg in messaggi:
-        msg_id = msg['id']
-        messaggio_completo = servizio.users().messages().get(
-            userId='me', id=msg_id, format='full'
+        dettaglio = service.users().messages().get(
+            userId="me", id=msg["id"], format="full"
         ).execute()
 
-        headers = messaggio_completo['payload'].get('headers', [])
-        oggetto = next((h['value'] for h in headers if h['name'].lower() == 'subject'), 'Nessun Oggetto')
+        labels = dettaglio.get("labelIds", [])
+        payload = dettaglio.get("payload", {})
+        headers = payload.get("headers", [])
+        mittente = next((h["value"] for h in headers if h["name"].lower() == "from"), "Sconosciuto")
+        oggetto = next((h["value"] for h in headers if h["name"].lower() == "subject"), "(Senza oggetto)")
+        testo = _estrai_testo_email(payload, dettaglio.get("snippet", ""))
 
-        mittente_raw = next((h['value'] for h in headers if h['name'].lower() == 'from'), 'Sconosciuto')
-        mittente_pulito = re.findall(r'<([^>]+)>', mittente_raw)
-        mittente = mittente_pulito[0] if mittente_pulito else mittente_raw
-
-        corpo = _estrai_corpo_ricorsivo(messaggio_completo['payload'])
-
-        email_trovate.append({
-            "id": msg_id,
+        email_lista.append({
+            "id": msg["id"],
             "mittente": mittente,
             "oggetto": oggetto,
-            "testo": corpo.strip()
+            "testo": testo,
+            "in_arrivo": ("INBOX" in labels) and ("SENT" not in labels),
+            "non_letta": "UNREAD" in labels,
         })
 
-    return email_trovate
+    return email_lista
+
+
+def leggi_email_non_lette(username: str = "admin", limite: int = 5) -> list[dict]:
+    """Scarica solo le email in arrivo non ancora lette dell'utente."""
+    tutte = leggi_tutte_le_email(username=username, limite=limite * 2)
+    return [e for e in tutte if e["in_arrivo"] and e["non_letta"]][:limite]
+
+
+def invia_email(destinatario: str, oggetto: str, corpo: str, username: str = "admin") -> str:
+    """Invia un'email dalla casella Gmail del dipendente specificato."""
+    service = _ottieni_servizio_gmail(username)
+    messaggio = MIMEText(corpo)
+    messaggio["to"] = destinatario
+    messaggio["subject"] = oggetto
+    raw = base64.urlsafe_b64encode(messaggio.as_bytes()).decode("utf-8")
+
+    service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    return f"Email inviata con successo a {destinatario}."
+
+
+def segna_email_come_letta(msg_id: str, username: str = "admin") -> bool:
+    """Rimuove l'etichetta UNREAD su Gmail per evitare doppie elaborazioni."""
+    service = _ottieni_servizio_gmail(username)
+    service.users().messages().modify(
+        userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+    ).execute()
+    return True
+
+
+def elimina_email(msg_id: str, username: str = "admin") -> bool:
+    """Sposta l'email nel cestino di Gmail."""
+    service = _ottieni_servizio_gmail(username)
+    service.users().messages().trash(userId="me", id=msg_id).execute()
+    return True

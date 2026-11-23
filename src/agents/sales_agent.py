@@ -1,126 +1,119 @@
 import json
+from typing import Literal, Optional
+
 import ollama
-import random
-import string
 from pydantic import BaseModel, Field, ValidationError
-from typing import Literal
 
 from src.core.state import PraticaUfficioState
-from src.tools.billing_tools import crea_nuova_fattura
+from src.tools.sales_tools import (
+    ottieni_catalogo_soluzioni,
+    calcola_preventivo,
+    genera_codici_licenza,
+)
 
 MODELLO_LLM = "qwen2.5:14b"
 OPZIONI_LLM = {"num_ctx": 8192, "temperature": 0.1}
 
 
-# --- NUOVA FUNZIONE: Generatore di Product Key ---
-def genera_codici_attivazione(quantita: int) -> list[str]:
-    """Genera N codici di attivazione univoci nel formato XXXX-XXXX-XXXX-XXXX."""
-    codici = []
-    # Limitiamo a 100 per sicurezza contro richieste malevole esagerate
-    quantita_reale = min(quantita, 100)
-    for _ in range(quantita_reale):
-        codice = '-'.join(''.join(random.choices(string.ascii_uppercase + string.digits, k=4)) for _ in range(4))
-        codici.append(codice)
-    return codici
-
-
-# --- NUOVO SCHEMA: Estrazione della quantità ---
-class EsitoCommerciale(BaseModel):
-    intenzione: Literal["PREVENTIVO", "ACQUISTO"]
-    quantita_licenze: int = Field(
-        description="Il numero esatto di licenze richieste. Usa 1 se non specificato altrimenti."
+class AzioneCommerciale(BaseModel):
+    azione: Literal["CATALOGO", "PREVENTIVO", "ORDINE", "CHIARIMENTO"] = Field(
+        description="Tipo di richiesta commerciale del cliente."
     )
-    importo_totale: float = Field(description="Il costo totale matematico calcolato.")
-    dettaglio_esito: str = Field(description="Resoconto discorsivo per il cliente.")
-    status_pratica: Literal["COMPLETATA", "ERRORE"]
+    soluzione_richiesta: Optional[str] = Field(
+        default=None,
+        description="Titolo esatto della soluzione dal catalogo aziendale, se identificabile."
+    )
+    quantita: int = Field(
+        default=1,
+        description="Numero di licenze o unità richieste (default 1)."
+    )
+    nota_chiarimento: Optional[str] = Field(
+        default=None,
+        description="Se azione='CHIARIMENTO', spiega cosa manca per formulare il preventivo."
+    )
 
 
 def nodo_commerciale(state: PraticaUfficioState) -> PraticaUfficioState:
-    print("\n💼 [UFFICIO COMMERCIALE] Presa in carico della pratica...")
+    """Reparto Commerciale: gestisce catalogo, preventivi (con sconti/IVA) e conferma ordini."""
+    print(f"\n💼 [REPARTO COMMERCIALE] Elaborazione richiesta per {state.get('mittente', 'Sconosciuto')}...")
 
-    schema_richiesto = EsitoCommerciale.model_json_schema()
-    email_originale = state.get("email_in_ingresso", "")
+    catalogo = ottieni_catalogo_soluzioni()
+    catalogo_txt = "\n".join(
+        f"- {s['titolo']} | Prezzo: {s['prezzo']} | {s['descrizione']}"
+        for s in catalogo
+    ) or "Nessuna soluzione attualmente a catalogo."
+
+    schema = AzioneCommerciale.model_json_schema()
 
     prompt = (
-        "Sei il Responsabile Commerciale dell'azienda. Il Direttore ti ha assegnato un task.\n\n"
-        f"EMAIL ORIGINALE DEL CLIENTE: {email_originale}\n"
-        f"MOTIVO ASSEGNAZIONE: {state.get('motivo_assegnazione', 'Nessun motivo')}\n"
-        f"DATI ESTRATTI: {json.dumps(state.get('dati_estratti', {}))}\n\n"
-        "REGOLE DI VENDITA AZIENDALI:\n"
-        "- Licenza Standard: 500€ l'una.\n"
-        "- Licenza Enterprise: 1000€ l'una.\n\n"
-        "COMPITO:\n"
-        "1. Identifica la 'quantita_licenze' desiderata.\n"
-        "2. Decidi se l'email indica un PREVENTIVO o un ACQUISTO confermato.\n"
-        "3. Calcola l'importo_totale.\n"
-        "4. Redigi il dettaglio_esito spiegando l'operazione.\n"
-        "Devi rispondere ESCLUSIVAMENTE con un JSON valido secondo questo schema:\n"
-        f"{json.dumps(schema_richiesto, indent=2)}"
+        "Sei l'addetto all'Ufficio Commerciale di SupervisorHQ.\n\n"
+        f"CATALOGO SOLUZIONI ATTUALE:\n{catalogo_txt}\n\n"
+        f"EMAIL DEL CLIENTE:\n{state['email_in_ingresso']}\n\n"
+        "REGOLE:\n"
+        "- Usa 'CATALOGO' se il cliente chiede informazioni generali sui prodotti o sui prezzi.\n"
+        "- Usa 'PREVENTIVO' se chiede un preventivo o il costo per una soluzione specifica.\n"
+        "- Usa 'ORDINE' se il cliente conferma esplicitamente di voler acquistare/attivare una soluzione.\n"
+        "- Usa 'CHIARIMENTO' se il prodotto richiesto non è chiaro o non esiste a catalogo.\n"
+        "- Nel campo 'soluzione_richiesta' copia il titolo esatto dal catalogo sopra.\n\n"
+        "Rispondi ESCLUSIVAMENTE con un JSON valido che rispetti questo schema:\n"
+        f"{json.dumps(schema, indent=2)}"
     )
 
     risp = ollama.chat(
         model=MODELLO_LLM,
         messages=[{"role": "user", "content": prompt}],
-        format='json',
+        format="json",
         options=OPZIONI_LLM
     )
 
     try:
-        esito = EsitoCommerciale.model_validate_json(risp['message']['content'].strip())
+        cmd = AzioneCommerciale.model_validate_json(risp["message"]["content"].strip())
+    except ValidationError as e:
+        print(f"   -> [⚠️ ERRORE PYDANTIC COMMERCIALE] {e}")
+        return {
+            "esito_reparto": "Richiesta commerciale non chiara. Chiedere al cliente quale soluzione del catalogo desidera.",
+            "prossimo_reparto": "SEGRETERIA_RISPONDE"
+        }
 
-        # Logica di Esecuzione (Il "Braccio Armato" del codice)
-        # Logica di Esecuzione (Il "Braccio Armato" del codice)
-        if esito.intenzione == "ACQUISTO" and esito.status_pratica == "COMPLETATA":
-            print(f"   -> 🛒 ACQUISTO: Richieste {esito.quantita_licenze} licenze per €{esito.importo_totale}")
+    print(f"   -> Azione: {cmd.azione} | Soluzione: {cmd.soluzione_richiesta} | Quantità: {cmd.quantita}")
 
-            try:
-                num_fattura = crea_nuova_fattura(esito.importo_totale)
-                codici = genera_codici_attivazione(esito.quantita_licenze)
-                codici_formattati = "\n".join([f"   🔑 {c}" for c in codici])
+    if cmd.azione == "CATALOGO":
+        esito = f"CATALOGO DISPONIBILE:\n{catalogo_txt}\n(Sconti automatici: 10% da 5+ licenze, 15% da 10+ licenze. Prezzi IVA 22% esclusa.)"
 
-                dettaglio_finale = (
-                    f"{esito.dettaglio_esito}\n\n"
-                    f"--- RIEPILOGO ORDINE ---\n"
-                    f"📄 Fattura Generata: {num_fattura}\n"
-                    f"📦 Codici di Attivazione ({esito.quantita_licenze} licenze):\n{codici_formattati}\n\n"
-                    f"Informa il cliente che i codici sono allegati in formato PDF."
+    elif cmd.azione == "CHIARIMENTO" or not cmd.soluzione_richiesta:
+        esito = (
+            f"CHIARIMENTO NECESSARIO: {cmd.nota_chiarimento or 'Specificare la soluzione desiderata.'}\n"
+            f"Soluzioni disponibili: {', '.join(s['titolo'] for s in catalogo)}."
+        )
+
+    elif cmd.azione in ("PREVENTIVO", "ORDINE"):
+        calc = calcola_preventivo(cmd.soluzione_richiesta, cmd.quantita)
+
+        if not calc["trovata"]:
+            esito = f"PRODOTTO NON TROVATO: {calc['errore']} Soluzioni disponibili: {', '.join(s['titolo'] for s in catalogo)}."
+        elif calc.get("su_misura"):
+            esito = f"QUOTAZIONE SU MISURA: {calc['messaggio']}"
+        else:
+            riepilogo = (
+                f"Soluzione: {calc['soluzione']}\n"
+                f"Quantità: {calc['quantita']} x € {calc['prezzo_unitario']:.2f}\n"
+                f"Sconto volume ({calc['sconto_perc']}%): -€ {calc['importo_sconto']:.2f}\n"
+                f"Imponibile: € {calc['imponibile']:.2f}\n"
+                f"IVA (22%): € {calc['iva']:.2f}\n"
+                f"TOTALE: € {calc['totale']:.2f}"
+            )
+            if cmd.azione == "PREVENTIVO":
+                esito = f"PREVENTIVO CALCOLATO:\n{riepilogo}\nChiedere al cliente se desidera confermare l'ordine."
+            else:
+                codici = genera_codici_licenza(calc["quantita"])
+                esito = (
+                    f"ORDINE CONFERMATO:\n{riepilogo}\n"
+                    f"Codici di attivazione generati: {', '.join(codici)}\n"
+                    "Informare il cliente che la pratica è stata presa in carico per l'emissione della fattura."
                 )
 
-                # 🔴 NOVITÀ: Salviamo i dati strutturati nel "fascicolo" per la Segreteria
-                pacchetto_acquisto = {
-                    "numero_fattura": num_fattura,
-                    "importo": esito.importo_totale,
-                    "codici": codici
-                }
-
-                return {
-                    "esito_reparto": dettaglio_finale,
-                    "status_pratica": esito.status_pratica,
-                    "invia_email_finale": True,
-                    "dati_acquisto": pacchetto_acquisto  # <--- Passaggio dei dati!
-                }
-            except Exception as e:
-                return {
-                    "esito_reparto": f"Errore nel sistema di provisioning: {e}",
-                    "status_pratica": "ERRORE",
-                    "invia_email_finale": True
-                }
-        else:
-            print("   -> ℹ️ Rilevata semplice richiesta di PREVENTIVO.")
-            dettaglio_finale = esito.dettaglio_esito
-
-        print(f"   -> Status: {esito.status_pratica}")
-
-        return {
-            "esito_reparto": dettaglio_finale,
-            "status_pratica": esito.status_pratica,
-            "invia_email_finale": True
-        }
-
-    except ValidationError as e:
-        print(f"   -> [⚠️ ERRORE] JSON non conforme: {e}")
-        return {
-            "esito_reparto": "Errore durante l'elaborazione commerciale.",
-            "status_pratica": "ERRORE",
-            "invia_email_finale": True
-        }
+    print(f"   -> Esito Commerciale: {esito}")
+    return {
+        "esito_reparto": esito,
+        "prossimo_reparto": "SEGRETERIA_RISPONDE"
+    }

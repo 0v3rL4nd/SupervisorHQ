@@ -1,70 +1,130 @@
 import json
+from typing import Literal, Optional
+
 import ollama
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from src.core.state import PraticaUfficioState
-from src.core.schema import EsitoReparto
-from src.tools.billing_tools import gestisci_pagamento
+from src.tools.billing_tools import (
+    ottieni_dati_bonifico,
+    cerca_fattura,
+    lista_fatture_per_stato,
+    emetti_nuova_fattura,
+    registra_pagamento_fattura,
+)
 
 MODELLO_LLM = "qwen2.5:14b"
 OPZIONI_LLM = {"num_ctx": 8192, "temperature": 0.1}
 
 
+class AzioneAmministrazione(BaseModel):
+    azione: Literal[
+        "STATO_FATTURA",
+        "ELENCO_DA_PAGARE",
+        "EMETTI_FATTURA",
+        "REGISTRA_PAGAMENTO",
+        "DATI_BONIFICO",
+        "CHIARIMENTO"
+    ] = Field(description="Tipo di operazione amministrativa richiesta.")
+    numero_fattura: Optional[str] = Field(
+        default=None,
+        description="Numero esatto della fattura (es. 'F-2026/001'), se presente nell'email."
+    )
+    importo: Optional[float] = Field(
+        default=None,
+        description="Importo numerico in euro, se presente (per emissione o pagamento)."
+    )
+    nota_chiarimento: Optional[str] = Field(
+        default=None,
+        description="Se azione='CHIARIMENTO', spiega quale dato manca (es. numero fattura o importo)."
+    )
+
+
 def nodo_amministrazione(state: PraticaUfficioState) -> PraticaUfficioState:
-    print("\n💶 [REPARTO AMMINISTRAZIONE] Accesso al database contabile SQLite...")
+    """Reparto Amministrazione: verifica fatture, registra pagamenti, emette documenti e fornisce IBAN."""
+    print(f"\n💰 [REPARTO AMMINISTRAZIONE] Elaborazione richiesta per {state.get('mittente', 'Sconosciuto')}...")
 
-    dati = state.get("dati_estratti", {})
-    # Controllo flessibile in caso l'LLM usi "fattura" o "numero_fattura"
-    numero_fattura = dati.get("fattura", dati.get("numero_fattura", ""))
-    importo_pagato = str(dati.get("importo_pagato", "0"))
-
-    # 1. Esecuzione Fisica SQL o Risposta Generica
-    if numero_fattura:
-        esito_db = gestisci_pagamento(numero_fattura, importo_pagato)
-    else:
-        # 🔴 CORREZIONE: Invece di un ERRORE, diamo all'impiegato le informazioni aziendali da riferire
-        esito_db = (
-            "INFO GENERICA: Il cliente non ha fornito un numero di fattura, quindi desidera "
-            "solo informazioni sui pagamenti. Informalo che accettiamo: Bonifico Bancario "
-            "(IT00000000000000000), Carta di Credito (tramite Stripe) e PayPal."
-        )
-
-    print(f"   -> DB/Sistema Risponde: {esito_db}")
-
-    # 2. Resoconto via LLM
-    schema_richiesto = EsitoReparto.model_json_schema()
+    schema = AzioneAmministrazione.model_json_schema()
 
     prompt = (
-        "Sei l'Impiegato Contabile dell'azienda. Il Direttore ti ha assegnato una pratica.\n\n"
-        f"MOTIVO ASSEGNAZIONE: {state.get('motivo_assegnazione', 'Nessun motivo')}\n"
-        f"ESITO DEL SISTEMA/DATABASE: {esito_db}\n\n"
-        "COMPITO: Redigi il resoconto dell'operazione basandoti ESCLUSIVAMENTE sull'esito del sistema appena fornito. "
-        "Se l'esito fornisce informazioni generiche (es. metodi di pagamento), usale per creare il resoconto senza segnalare errori.\n"
-        "Se c'è stato un vero 'ERRORE' nel database SQLite (es. fattura non trovata), usa lo status_pratica ERRORE.\n"
-        "Devi rispondere ESCLUSIVAMENTE con un oggetto JSON valido che rispetti questo schema:\n"
-        f"{json.dumps(schema_richiesto, indent=2)}"
+        "Sei l'addetto all'Ufficio Amministrazione e Contabilità di SupervisorHQ.\n\n"
+        f"EMAIL DEL CLIENTE:\n{state['email_in_ingresso']}\n\n"
+        "REGOLE:\n"
+        "- Usa 'STATO_FATTURA' se il cliente chiede informazioni su una fattura specifica (serve numero_fattura).\n"
+        "- Usa 'ELENCO_DA_PAGARE' se chiede quali fatture sono ancora aperte o da saldare.\n"
+        "- Usa 'EMETTI_FATTURA' se chiede di emettere una nuova fattura per un importo specifico.\n"
+        "- Usa 'REGISTRA_PAGAMENTO' se comunica di aver pagato una fattura indicando numero e importo.\n"
+        "- Usa 'DATI_BONIFICO' se chiede IBAN, Partita IVA, Codice SDI o coordinate per pagare.\n"
+        "- Usa 'CHIARIMENTO' se mancano dati essenziali (NON inventare mai numeri di fattura o importi).\n\n"
+        "Rispondi ESCLUSIVAMENTE con un JSON valido che rispetti questo schema:\n"
+        f"{json.dumps(schema, indent=2)}"
     )
 
     risp = ollama.chat(
         model=MODELLO_LLM,
         messages=[{"role": "user", "content": prompt}],
-        format='json',
+        format="json",
         options=OPZIONI_LLM
     )
 
     try:
-        esito_validato = EsitoReparto.model_validate_json(risp['message']['content'].strip())
-        print(f"   -> Status: {esito_validato.status_pratica}")
-
-        return {
-            "esito_reparto": esito_validato.dettaglio_esito,
-            "status_pratica": esito_validato.status_pratica,
-            "invia_email_finale": True
-        }
-
+        cmd = AzioneAmministrazione.model_validate_json(risp["message"]["content"].strip())
     except ValidationError as e:
+        print(f"   -> [⚠️ ERRORE PYDANTIC AMMINISTRAZIONE] {e}")
         return {
-            "esito_reparto": "Errore interno nella generazione del report contabile.",
-            "status_pratica": "ERRORE",
-            "invia_email_finale": True
+            "esito_reparto": "Richiesta amministrativa non chiara. Chiedere al cliente di specificare il numero di fattura o l'operazione desiderata.",
+            "prossimo_reparto": "SEGRETERIA_RISPONDE"
         }
+
+    print(f"   -> Azione: {cmd.azione} | Fattura: {cmd.numero_fattura} | Importo: {cmd.importo}")
+
+    try:
+        if cmd.azione == "DATI_BONIFICO":
+            esito = f"COORDINATE UFFICIALI:\n{ottieni_dati_bonifico(cmd.numero_fattura)}"
+
+        elif cmd.azione == "STATO_FATTURA":
+            if not cmd.numero_fattura:
+                esito = "CHIARIMENTO NECESSARIO: Indicare il numero esatto della fattura (es. F-2026/001) per verificarne lo stato."
+            else:
+                f = cerca_fattura(cmd.numero_fattura)
+                if not f:
+                    esito = f"NON TROVATA: La fattura '{cmd.numero_fattura}' non è presente nel registro contabile."
+                else:
+                    esito = f"DETTAGLIO FATTURA: {f['numero_fattura']} | Importo: € {float(f['importo']):.2f} | Stato: {f['stato']}."
+
+        elif cmd.azione == "ELENCO_DA_PAGARE":
+            aperte = lista_fatture_per_stato("DA_PAGARE")
+            if not aperte:
+                esito = "TUTTO SALDATO: Non risultano fatture da pagare nel registro."
+            else:
+                righe = "\n".join(f"- {f['numero_fattura']}: € {float(f['importo']):.2f}" for f in aperte)
+                tot = sum(float(f["importo"]) for f in aperte)
+                esito = f"FATTURE DA PAGARE:\n{righe}\nTotale residuo: € {tot:.2f}"
+
+        elif cmd.azione == "EMETTI_FATTURA":
+            if not cmd.importo or cmd.importo <= 0:
+                esito = "CHIARIMENTO NECESSARIO: Specificare l'importo esatto per emettere la fattura."
+            else:
+                nuova = emetti_nuova_fattura(cmd.importo)
+                esito = (
+                    f"FATTURA EMESSA: {nuova['numero_fattura']} per € {nuova['importo']:.2f} (Stato: {nuova['stato']}).\n"
+                    f"Coordinate per il saldo:\n{ottieni_dati_bonifico(nuova['numero_fattura'])}"
+                )
+
+        elif cmd.azione == "REGISTRA_PAGAMENTO":
+            if not cmd.numero_fattura or cmd.importo is None:
+                esito = "CHIARIMENTO NECESSARIO: Per registrare il pagamento servono sia il numero di fattura sia l'importo versato."
+            else:
+                esito = registra_pagamento_fattura(cmd.numero_fattura, cmd.importo)
+
+        else:
+            esito = f"CHIARIMENTO NECESSARIO: {cmd.nota_chiarimento or 'Specificare il numero di fattura o la richiesta contabile.'}"
+
+    except Exception as e:
+        esito = f"ERRORE_CONTABILITA: Impossibile completare l'operazione sul database ({e})."
+
+    print(f"   -> Esito Amministrazione: {esito}")
+    return {
+        "esito_reparto": esito,
+        "prossimo_reparto": "SEGRETERIA_RISPONDE"
+    }

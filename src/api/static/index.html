@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SupervisorHQ — Multi-Agent Office</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar glass">
+        <div class="brand">🛡️ Supervisor<span>HQ</span></div>
+        <div class="nav-actions">
+            <button id="btn_vista_clienti" class="btn btn-sm">Portale Clienti</button>
+            <button id="btn_vista_admin" class="btn btn-sm">Area Dipendenti</button>
+            <button id="btn_logout" class="btn btn-danger btn-sm hidden">Esci</button>
+        </div>
+    </nav>
+
+    <main class="container">
+        <!-- ================= VISTA CLIENTI ================= -->
+        <section id="view_client">
+            <div class="card glass">
+                <div class="card-header"><h2>📦 Catalogo Soluzioni Aziendali</h2></div>
+                <div id="grid_soluzioni_client" class="grid-cards"></div>
+            </div>
+
+            <div class="card glass">
+                <div class="card-header"><h2>✉️ Invia una Richiesta al Supervisore AI</h2></div>
+                <div class="form-row">
+                    <input type="email" id="client_email" placeholder="La tua email (es. cliente@azienda.it)">
+                </div>
+                <div class="form-row">
+                    <textarea id="client_testo" rows="4" placeholder="Descrivi la tua richiesta (preventivo, fattura, appuntamento, supporto tecnico)..."></textarea>
+                </div>
+                <button id="btn_invia_pratica" class="btn btn-primary">Invia Richiesta</button>
+                <div id="client_esito" class="msg msg-ai hidden" style="margin-top: 16px; max-width: 100%;"></div>
+            </div>
+        </section>
+
+        <!-- ================= LOGIN ADMIN ================= -->
+        <section id="view_login" class="hidden">
+            <div class="card glass" style="max-width: 420px; margin: 60px auto;">
+                <div class="card-header"><h2>🔐 Accesso Dipendenti</h2></div>
+                <div class="form-row"><input type="text" id="login_user" placeholder="Username"></div>
+                <div class="form-row"><input type="password" id="login_pass" placeholder="Password"></div>
+                <button id="btn_do_login" class="btn btn-primary" style="width: 100%;">Accedi</button>
+                <p id="login_err" style="color: var(--danger); margin-top: 10px; font-size: 0.85rem;"></p>
+            </div>
+        </section>
+
+        <!-- ================= AREA DIPENDENTI ================= -->
+        <section id="view_admin" class="hidden">
+            <!-- STATO ACCOUNT GOOGLE MULTI-UTENTE -->
+            <div class="glass" style="padding: 14px 20px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span id="google_status_badge" class="badge badge-warn">Verifica Google...</span>
+                    <span id="google_status_email" style="font-size: 0.9rem; color: var(--text-muted);"></span>
+                </div>
+                <button id="btn_collega_google" class="btn btn-primary btn-sm">🔗 Collega Account Google</button>
+            </div>
+            <!-- BARRA KPI IN TEMPO REALE -->
+            <div class="kpi-grid">
+                <div class="glass kpi-card">
+                    <span class="kpi-label">🛠️ Ticket Aperti</span>
+                    <span id="kpi_ticket_aperti" class="kpi-value warn">0</span>
+                    <span id="kpi_ticket_sub" class="kpi-sub">0 in lavorazione</span>
+                </div>
+                <div class="glass kpi-card">
+                    <span class="kpi-label">📄 Fatture da Pagare</span>
+                    <span id="kpi_fatture_aperte" class="kpi-value err">0</span>
+                    <span id="kpi_fatture_residuo" class="kpi-sub">€ 0.00 residui</span>
+                </div>
+                <div class="glass kpi-card">
+                    <span class="kpi-label">💰 Totale Incassato</span>
+                    <span id="kpi_totale_incassato" class="kpi-value ok">€ 0.00</span>
+                    <span id="kpi_fatture_pagate" class="kpi-sub">0 fatture saldate</span>
+                </div>
+            </div>
+            <div class="admin-tabs">
+                <button class="btn tab-btn active" data-tab="tab_inbox">📧 Inbox AI</button>
+                <button class="btn tab-btn" data-tab="tab_ticket">🛠️ Ticket</button>
+                <button class="btn tab-btn" data-tab="tab_fatture">💰 Fatture</button>
+                <button class="btn tab-btn" data-tab="tab_catalogo">📦 Catalogo</button>
+                <button class="btn tab-btn" data-tab="tab_chat">🤖 Chat Interna</button>
+            </div>
+
+            <!-- TAB INBOX -->
+            <div id="tab_inbox" class="card glass admin-panel">
+                <div class="card-header">
+                    <h2>📧 Posta in Arrivo & Smistamento AI</h2>
+                    <button id="btn_sync_inbox" class="btn btn-primary btn-sm">🔄 Sincronizza Gmail</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Mittente / Oggetto</th><th>Reparto AI</th><th>Esito AI</th><th>Azioni</th></tr></thead>                        <tbody id="tbody_inbox"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- TAB TICKET -->
+            <div id="tab_ticket" class="card glass admin-panel hidden">
+                <div class="card-header">
+                    <h2>🛠️ Ticket Assistenza Tecnica</h2>
+                    <div style="display:flex; gap:10px;">
+                        <select id="filtro_ticket" style="width:auto;">
+                            <option value="TUTTI">Tutti</option>
+                            <option value="APERTO">Aperti</option>
+                            <option value="IN_LAVORAZIONE">In lavorazione</option>
+                            <option value="CHIUSO">Chiusi</option>
+                        </select>
+                        <button id="btn_refresh_ticket" class="btn btn-sm">🔄 Aggiorna</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Codice</th><th>Cliente</th><th>Problema</th><th>Priorità</th><th>Stato</th><th>Azioni</th></tr></thead>
+                        <tbody id="tbody_ticket"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- TAB FATTURE -->
+            <div id="tab_fatture" class="card glass admin-panel hidden">
+                <div class="card-header">
+                    <h2>💰 Registro Contabile</h2>
+                    <div style="display:flex; gap:8px;">
+                        <input type="number" id="nuova_fattura_importo" placeholder="Importo €" style="width:130px;">
+                        <button id="btn_crea_fattura" class="btn btn-primary btn-sm">+ Emetti</button>
+                    </div>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead><tr><th>Numero</th><th>Importo</th><th>Stato</th><th>Azioni</th></tr></thead>
+                        <tbody id="tbody_fatture"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- TAB CATALOGO -->
+            <div id="tab_catalogo" class="card glass admin-panel hidden">
+                <div class="card-header"><h2>📦 Gestione Catalogo Soluzioni</h2></div>
+                <div class="form-row">
+                    <input type="text" id="sol_titolo" placeholder="Titolo soluzione">
+                    <input type="text" id="sol_prezzo" placeholder="Prezzo (es. € 299 / mese)">
+                    <input type="text" id="sol_icona" placeholder="Icona (es. 🚀)" value="🚀" style="max-width:90px;">
+                </div>
+                <div class="form-row">
+                    <input type="text" id="sol_desc" placeholder="Descrizione breve">
+                    <input type="text" id="sol_prompt" placeholder="Prompt precompilato per il cliente">
+                    <button id="btn_crea_soluzione" class="btn btn-primary" style="flex:0 0 auto;">+ Aggiungi</button>
+                </div>
+                <div class="table-wrap" style="margin-top:16px;">
+                    <table>
+                        <thead><tr><th>Soluzione</th><th>Prezzo</th><th>Azioni</th></tr></thead>
+                        <tbody id="tbody_catalogo"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- TAB CHAT INTERNA -->
+            <div id="tab_chat" class="card glass admin-panel hidden">
+                <div class="card-header"><h2>🤖 Assistente Interno AI (Dati Live)</h2></div>
+                <div class="chips">
+                    <button class="btn btn-sm chip-chat" data-q="Quali ticket di assistenza sono ancora aperti o critici?">🛠️ Ticket aperti</button>
+                    <button class="btn btn-sm chip-chat" data-q="Quali fatture risultano ancora da pagare?">💰 Fatture aperte</button>
+                    <button class="btn btn-sm chip-chat" data-q="Quali appuntamenti abbiamo in agenda?">📅 Prossimi eventi</button>
+                </div>
+                <div id="chat_box" class="chat-box"></div>
+                <div class="form-row" style="margin-bottom:0;">
+                    <input type="text" id="chat_input" placeholder="Chiedi qualcosa su inbox, fatture, ticket o agenda...">
+                    <button id="btn_send_chat" class="btn btn-primary" style="flex:0 0 auto;">Invia</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script type="module" src="/static/js/main.js"></script>
+</body>
+</html>

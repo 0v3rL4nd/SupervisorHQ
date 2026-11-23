@@ -27,7 +27,7 @@ def crea_token(username: str, ruolo: str) -> str:
 
 def verifica_admin(
     credentials: HTTPAuthorizationCredentials = Depends(security_scheme)
-) -> str:
+    ) -> str:
     """Dependency FastAPI: valida il JWT e verifica che il ruolo sia ROLE_ADMIN."""
     token = credentials.credentials
 
