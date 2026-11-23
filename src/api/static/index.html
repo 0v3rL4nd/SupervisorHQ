@@ -58,6 +58,7 @@
                 </div>
                 <button id="btn_collega_google" class="btn btn-primary btn-sm">🔗 Collega Account Google</button>
             </div>
+
             <!-- BARRA KPI IN TEMPO REALE -->
             <div class="kpi-grid">
                 <div class="glass kpi-card">
@@ -76,12 +77,14 @@
                     <span id="kpi_fatture_pagate" class="kpi-sub">0 fatture saldate</span>
                 </div>
             </div>
+
             <div class="admin-tabs">
                 <button class="btn tab-btn active" data-tab="tab_inbox">📧 Inbox AI</button>
                 <button class="btn tab-btn" data-tab="tab_ticket">🛠️ Ticket</button>
                 <button class="btn tab-btn" data-tab="tab_fatture">💰 Fatture</button>
                 <button class="btn tab-btn" data-tab="tab_catalogo">📦 Catalogo</button>
                 <button class="btn tab-btn" data-tab="tab_chat">🤖 Chat Interna</button>
+                <button class="btn tab-btn" data-tab="tab_verbali">📝 Verbali</button>
             </div>
 
             <!-- TAB INBOX -->
@@ -92,7 +95,8 @@
                 </div>
                 <div class="table-wrap">
                     <table>
-                        <thead><tr><th>Mittente / Oggetto</th><th>Reparto AI</th><th>Esito AI</th><th>Azioni</th></tr></thead>                        <tbody id="tbody_inbox"></tbody>
+                        <thead><tr><th>Mittente / Oggetto</th><th>Reparto AI</th><th>Esito AI</th><th>Azioni</th></tr></thead>
+                        <tbody id="tbody_inbox"></tbody>
                     </table>
                 </div>
             </div>
@@ -170,6 +174,26 @@
                     <input type="text" id="chat_input" placeholder="Chiedi qualcosa su inbox, fatture, ticket o agenda...">
                     <button id="btn_send_chat" class="btn btn-primary" style="flex:0 0 auto;">Invia</button>
                 </div>
+            </div>
+
+            <!-- TAB VERBALI -->
+            <div id="tab_verbali" class="card glass admin-panel hidden">
+                <div class="card-header">
+                    <h2>📝 Analisi Verbali di Riunione</h2>
+                    <button id="btn_refresh_verbali" class="btn btn-sm">🔄 Aggiorna</button>
+                </div>
+
+                <div class="form-row" style="align-items: center;">
+                    <input type="file" id="verbale_file" accept=".pdf,.docx,.txt,.md">
+                    <button id="btn_upload_verbale" class="btn btn-primary btn-sm" style="flex:0 0 auto;">📤 Carica File</button>
+                </div>
+
+                <div class="form-row">
+                    <textarea id="verbale_testo" rows="4" placeholder="Oppure incolla qui il testo del verbale di riunione..."></textarea>
+                </div>
+                <button id="btn_analizza_verbale" class="btn btn-primary btn-sm" style="margin-bottom: 20px;">🤖 Analizza Verbale</button>
+
+                <div id="lista_verbali" style="display: flex; flex-direction: column; gap: 16px;"></div>
             </div>
         </section>
     </main>

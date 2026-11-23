@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -6,7 +7,15 @@ from zoneinfo import ZoneInfo
 import ollama
 from pydantic import BaseModel, Field
 
-from src.core.database import lista_dipendenti, salva_verbale_con_azioni
+from src.core.database import (
+    lista_dipendenti,
+    ottieni_dipendente,
+    salva_verbale_con_azioni,
+    ottieni_azione_verbale,
+    aggiorna_stato_azione_verbale,
+)
+from src.tools.calendar_tools import prenota_appuntamento
+from src.tools.ticket_tools import apri_ticket
 
 MODELLO_LLM = "qwen2.5:14b"
 OPZIONI_LLM = {"num_ctx": 8192, "temperature": 0.1}
@@ -162,3 +171,84 @@ def elabora_verbale(testo: str, username: str, fonte: str = "TESTO") -> dict:
         "riepilogo": analisi.riepilogo,
         "azioni_estratte": len(azioni),
     }
+
+def _cerca_documento_locale(nome_doc: str) -> str | None:
+    """Cerca il documento citato nelle cartelle locali del progetto (es. data/, docs/, manuali/)."""
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    cartelle_target = [
+        os.path.join(base_dir, "data"),
+        os.path.join(base_dir, "docs"),
+        os.path.join(base_dir, "manuali"),
+        base_dir,
+    ]
+    target = nome_doc.strip().lower()
+
+    for cartella in cartelle_target:
+        if not os.path.isdir(cartella):
+            continue
+        for root, _, files in os.walk(cartella):
+            if ".venv" in root or ".git" in root or "__pycache__" in root:
+                continue
+            for f in files:
+                if target in f.lower() or f.lower() in target:
+                    return os.path.relpath(os.path.join(root, f), base_dir)
+    return None
+
+
+def esegui_azione_verbale(azione_id: int, username: str) -> dict:
+    """Esegue concretamente un'azione approvata dal dipendente (Calendar, Documenti, Ticket o Task)."""
+    azione = ottieni_azione_verbale(azione_id)
+    if not azione:
+        raise ValueError(f"Azione #{azione_id} non trovata.")
+
+    tipo = azione["tipo"]
+    payload = azione["payload"]
+
+    try:
+        if tipo == "RIUNIONE":
+            data_ora = payload.get("data_ora_iso")
+            if not data_ora:
+                raise ValueError("Data/ora mancante nel verbale: impossibile schedulare automaticamente.")
+            esito = prenota_appuntamento(
+                titolo=payload.get("titolo", "Riunione SupervisorHQ"),
+                data_ora_iso=data_ora,
+                durata_minuti=int(payload.get("durata_minuti", 60)),
+                partecipanti=payload.get("partecipanti_email", []),
+                username=username,
+            )
+            stato_finale = "CONFLITTO" if esito.startswith("OCCUPATO") else "ESEGUITA"
+
+        elif tipo == "DOCUMENTO":
+            nome = payload.get("nome", "")
+            percorso = _cerca_documento_locale(nome)
+            if percorso:
+                esito = f"TROVATO in archivio locale: {percorso}"
+                stato_finale = "ESEGUITA"
+            else:
+                esito = f"MANCANTE: nessun file corrispondente a '{nome}' trovato nelle cartelle locali."
+                stato_finale = "ATTENZIONE"
+
+        elif tipo == "TICKET":
+            dip = ottieni_dipendente(username)
+            email_ref = (dip or {}).get("email_aziendale") or f"{username}@supervisorhq.local"
+            nuovo_tk = apri_ticket(
+                email_cliente=email_ref,
+                problema=payload.get("descrizione", azione["descrizione"]),
+                priorita="MEDIA",
+            )
+            codice = nuovo_tk.get("codice_ticket") if isinstance(nuovo_tk, dict) else str(nuovo_tk)
+            esito = f"Ticket aperto con successo: {codice}"
+            stato_finale = "ESEGUITA"
+
+        else:  # ACTION_ITEM generico
+            resp = payload.get("responsabile") or username
+            scad = payload.get("scadenza") or "non specificata"
+            esito = f"Presa in carico confermata (Responsabile: {resp} | Scadenza: {scad})."
+            stato_finale = "ESEGUITA"
+
+        aggiorna_stato_azione_verbale(azione_id, stato_finale, esito)
+        return {"azione_id": azione_id, "stato": stato_finale, "esito": esito}
+
+    except Exception as e:
+        aggiorna_stato_azione_verbale(azione_id, "ERRORE", str(e))
+        raise

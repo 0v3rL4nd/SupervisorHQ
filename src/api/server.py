@@ -6,7 +6,9 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 
+from src.agents.minutes_agent import elabora_verbale, esegui_azione_verbale
 from src.core.security import (
     crea_token,
     verifica_admin
@@ -28,7 +30,10 @@ from src.core.database import (
     crea_soluzione,
     aggiorna_soluzione,
     elimina_soluzione,
+    lista_verbali,
+    aggiorna_stato_azione_verbale,
 )
+from src.tools.document_parser import estrai_testo_da_bytes
 
 from src.workflow.graph import compila_grafo_ufficio
 from src.tools.calendar_tools import ottieni_prossimi_eventi
@@ -142,6 +147,9 @@ class AggiornaTicketRequest(BaseModel):
     problema: str | None = None
     priorita: str | None = None
     stato: str | None = None
+
+class VerbaleTestoRequest(BaseModel):
+    testo: str
 
 # ==========================================
 # 1. ROTTE PUBBLICHE (GUI, AUTH, PORTALE CLIENTI)
@@ -562,3 +570,59 @@ async def chat_assistente_interno(req: ChatInternaRequest, utente: str = Depends
         print(f"❌ [ERRORE CHAT]: {str(e)}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- VERBALI DI RIUNIONE (HUMAN-IN-THE-LOOP) ---
+@app.get("/api/v1/amministrazione/verbali")
+async def api_lista_verbali(utente: str = Depends(verifica_admin)):
+    try:
+        return {"status": "ok", "dati": lista_verbali()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore lettura verbali: {str(e)}")
+
+
+@app.post("/api/v1/amministrazione/verbali/testo")
+async def api_verbale_da_testo(req: VerbaleTestoRequest, utente: str = Depends(verifica_admin)):
+    if not req.testo.strip():
+        raise HTTPException(status_code=400, detail="Il testo del verbale è vuoto.")
+    try:
+        risultato = elabora_verbale(req.testo.strip(), username=utente, fonte="TESTO")
+        return {"status": "ok", "dati": risultato}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore analisi verbale: {str(e)}")
+
+
+@app.post("/api/v1/amministrazione/verbali/upload")
+async def api_verbale_da_file(file: UploadFile = File(...), utente: str = Depends(verifica_admin)):
+    try:
+        contenuto = await file.read()
+        testo = estrai_testo_da_bytes(contenuto, file.filename or "verbale.txt")
+        if not testo:
+            raise HTTPException(status_code=400, detail="Impossibile estrarre testo dal file caricato.")
+        risultato = elabora_verbale(testo, username=utente, fonte=f"FILE:{file.filename}")
+        return {"status": "ok", "dati": risultato}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore elaborazione file: {str(e)}")
+
+
+@app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/approva")
+async def api_approva_azione_verbale(azione_id: int, utente: str = Depends(verifica_admin)):
+    try:
+        res = esegui_azione_verbale(azione_id, username=utente)
+        return {"status": "ok", "dati": res}
+    except (ValueError, PermissionError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore esecuzione azione: {str(e)}")
+
+
+@app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/rifiuta")
+async def api_rifiuta_azione_verbale(azione_id: int, utente: str = Depends(verifica_admin)):
+    ok = aggiorna_stato_azione_verbale(azione_id, "RIFIUTATA", f"Rifiutata da {utente}")
+    if not ok:
+        raise HTTPException(status_code=404, detail="Azione non trovata.")
+    return {"status": "ok", "messaggio": "Azione rifiutata."}

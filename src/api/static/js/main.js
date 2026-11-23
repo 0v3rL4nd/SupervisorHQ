@@ -2,7 +2,8 @@ import { apiFetch, getToken, setToken, clearToken } from './api.js';
 import { caricaCatalogoClienti, inviaPraticaCliente } from './client.js';
 import {
     caricaTuttiDatiAdmin, sincronizzaInbox, caricaTicket, renderTicket,
-    creaFattura, creaSoluzioneAdmin, inviaChatInterna, collegaGoogle
+    creaFattura, creaSoluzioneAdmin, inviaChatInterna, collegaGoogle,
+    caricaVerbali, inviaVerbaleTesto, caricaFileVerbale
 } from './admin.js';
 
 function mostraVista(nome) {
@@ -60,5 +61,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn_crea_fattura').onclick = creaFattura;
     document.getElementById('btn_crea_soluzione').onclick = creaSoluzioneAdmin;
     document.getElementById('btn_send_chat').onclick = () => inviaChatInterna();
+    document.getElementById('btn_refresh_verbali')?.addEventListener('click', caricaVerbali);
+    document.getElementById('btn_analizza_verbale')?.addEventListener('click', inviaVerbaleTesto);
+    document.getElementById('btn_upload_verbale')?.addEventListener('click', caricaFileVerbale);
     document.querySelectorAll('.chip-chat').forEach(c => c.onclick = () => inviaChatInterna(c.dataset.q));
 });

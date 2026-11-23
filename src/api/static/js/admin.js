@@ -1,4 +1,4 @@
-import { apiFetch } from './api.js';
+import { apiFetch, getToken } from './api.js';
 
 let memoriaTicket = [];
 let memoriaFatture = [];
@@ -69,7 +69,8 @@ export async function caricaTuttiDatiAdmin() {
         verificaStatoGoogle(),
         caricaTicket(),
         caricaFatture(),
-        caricaCatalogoAdmin()
+        caricaCatalogoAdmin(),
+        caricaVerbali()
     ]);
 }
 
@@ -423,4 +424,138 @@ export async function inviaChatInterna(testoOverride = null) {
         aDiv.textContent = `Errore: ${e.message}`;
     }
     box.scrollTop = box.scrollHeight;
+}
+
+/* --- VERBALI DI RIUNIONE --- */
+export async function caricaVerbali() {
+    const container = document.getElementById('lista_verbali');
+    if (!container) return;
+    container.innerHTML = '';
+
+    try {
+        const res = await apiFetch('/api/v1/amministrazione/verbali', {}, true);
+        const lista = res.dati || [];
+
+        if (!lista.length) {
+            container.innerHTML = '<p style="color:var(--text-muted); text-align:center;">Nessun verbale analizzato.</p>';
+            return;
+        }
+
+        lista.forEach(v => {
+            const card = document.createElement('div');
+            card.className = 'glass';
+            card.style.cssText = 'padding:16px; border-radius:12px;';
+
+            const header = document.createElement('div');
+            header.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;';
+            header.innerHTML = `<strong>📝 ${v.titolo}</strong><span class="badge badge-warn">${v.fonte}</span>`;
+
+            const riep = document.createElement('p');
+            riep.style.cssText = 'font-size:0.9rem; color:var(--text-muted); margin-bottom:12px;';
+            riep.textContent = v.riepilogo || '';
+
+            const ul = document.createElement('div');
+            ul.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+            (v.azioni || []).forEach(a => {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap;';
+
+                const info = document.createElement('div');
+                const badgeCls = a.stato === 'ESEGUITA' ? 'badge-ok' : (a.stato === 'DA_CONFERMARE' ? 'badge-warn' : 'badge-err');
+                info.innerHTML = `<span class="badge ${badgeCls}" style="margin-right:8px;">${a.tipo} · ${a.stato}</span><span>${a.descrizione}</span>`;
+                if (a.esito) {
+                    const esitoEl = document.createElement('div');
+                    esitoEl.style.cssText = 'font-size:0.8rem; color:var(--text-muted); margin-top:4px;';
+                    esitoEl.textContent = `Esito: ${a.esito}`;
+                    info.appendChild(esitoEl);
+                }
+
+                const actions = document.createElement('div');
+                actions.style.cssText = 'display:flex; gap:6px;';
+                if (a.stato === 'DA_CONFERMARE') {
+                    const bOk = document.createElement('button');
+                    bOk.className = 'btn btn-success btn-sm';
+                    bOk.textContent = '✔️ Approva';
+                    bOk.onclick = () => gestisciAzioneVerbale(a.id, 'approva');
+
+                    const bNo = document.createElement('button');
+                    bNo.className = 'btn btn-danger btn-sm';
+                    bNo.textContent = '✖️ Rifiuta';
+                    bNo.onclick = () => gestisciAzioneVerbale(a.id, 'rifiuta');
+
+                    actions.append(bOk, bNo);
+                }
+
+                row.append(info, actions);
+                ul.appendChild(row);
+            });
+
+            card.append(header, riep, ul);
+            container.appendChild(card);
+        });
+    } catch (err) {
+        container.innerHTML = `<p style="color:var(--danger);">Errore caricamento verbali: ${err.message}</p>`;
+    }
+}
+
+export async function inviaVerbaleTesto() {
+    const textarea = document.getElementById('verbale_testo');
+    const btn = document.getElementById('btn_analizza_verbale');
+    const testo = textarea.value.trim();
+    if (!testo) return alert('Incolla il testo del verbale prima di analizzare.');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Analisi AI in corso...';
+    try {
+        await apiFetch('/api/v1/amministrazione/verbali/testo', {
+            method: 'POST',
+            body: JSON.stringify({ testo })
+        }, true);
+        textarea.value = '';
+        await caricaVerbali();
+    } catch (err) {
+        alert(`Errore analisi verbale: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🤖 Analizza Verbale';
+    }
+}
+
+export async function caricaFileVerbale() {
+    const input = document.getElementById('verbale_file');
+    const btn = document.getElementById('btn_upload_verbale');
+    if (!input.files.length) return alert('Seleziona un file PDF, DOCX, TXT o MD.');
+
+    const formData = new FormData();
+    formData.append('file', input.files[0]);
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Caricamento...';
+    try {
+            const token = getToken() || '';        const res = await fetch('/api/v1/amministrazione/verbali/upload', {
+            method: 'POST',
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+            body: formData
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Errore upload');
+        input.value = '';
+        await caricaVerbali();
+    } catch (err) {
+        alert(`Errore caricamento file: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '📤 Carica File';
+    }
+}
+
+async function gestisciAzioneVerbale(azioneId, azione) {
+    try {
+        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azioneId}/${azione}`, { method: 'POST' }, true);
+        await caricaVerbali();
+        await caricaTicket(); // aggiorna KPI se l'azione ha aperto un ticket
+    } catch (err) {
+        alert(`Errore esecuzione azione: ${err.message}`);
+    }
 }
