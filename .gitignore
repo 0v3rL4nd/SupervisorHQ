@@ -1,13 +1,14 @@
 @"
 credentials.json
-token_gmail.json
-token_calendar.json
+token*.json
+tokens/
 .env
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 *.db
+*.db-journal
 chroma_db/
 .idea/
 "@ | Set-Content -Path .gitignore -Encoding utf8
