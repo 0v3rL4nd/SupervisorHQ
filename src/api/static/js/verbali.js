@@ -363,8 +363,7 @@ function costruisciFormModifica(container, azione) {
                 problema: inProb.value.trim(),
             }
         });
-
-    }  else if (azione.tipo === 'CATALOGO') {
+    } else if (azione.tipo === 'CATALOGO') {
         const inOp = campo('Operazione (CREA, AGGIORNA, ELIMINA)', p.azione || 'CREA');
         const inId = campo('ID soluzione (per AGGIORNA/ELIMINA)', p.soluzione_id ?? '', 'number');
         const inTit = campo('Titolo soluzione', p.titolo || '');
@@ -410,15 +409,57 @@ function costruisciFormModifica(container, azione) {
         raccogli = () => ({ descrizione: inDesc.value.trim(), payload: { ...p, descrizione: inDesc.value.trim() } });
     }
 
+    const inNoteAi = campo(
+        'Note / istruzioni per rigenerare con AI (es. "tono più formale", "sposta a giovedì alle 16", "cambia prezzo a 290€")',
+        '',
+        'textarea'
+    );
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap; margin-top:4px;';
+
     const btn = document.createElement('button');
     btn.className = 'btn btn-primary btn-sm';
-    btn.style.alignSelf = 'flex-start';
     btn.textContent = '💾 Salva modifiche';
     btn.onclick = async () => {
-        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azione.id}`, { method: 'PUT', body: JSON.stringify(raccogli()) }, true);
-        await caricaArchivio();
+        try {
+            await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azione.id}`, {
+                method: 'PUT',
+                body: JSON.stringify(raccogli())
+            }, true);
+            await caricaArchivio();
+        } catch (err) {
+            alert(`Errore salvataggio: ${err.message}`);
+        }
     };
-    container.appendChild(btn);
+
+    const btnRegen = document.createElement('button');
+    btnRegen.className = 'btn btn-sm';
+    btnRegen.textContent = '✨ Rigenera con AI';
+    btnRegen.onclick = async () => {
+        const note = inNoteAi.value.trim();
+        const datiCorrenti = raccogli();
+        const istruzioni = note || `Riscrivi e perfeziona questa bozza partendo dai campi modificati: ${datiCorrenti.descrizione}`;
+        btnRegen.disabled = true;
+        btnRegen.textContent = '⏳ Rigenerazione...';
+        try {
+            await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azione.id}/rigenera`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    istruzioni_utente: istruzioni,
+                    payload: datiCorrenti.payload,
+                })
+            }, true);
+            await caricaArchivio();
+        } catch (err) {
+            alert(`Errore rigenerazione AI: ${err.message}`);
+            btnRegen.disabled = false;
+            btnRegen.textContent = '✨ Rigenera con AI';
+        }
+    };
+
+    btnRow.append(btn, btnRegen);
+    container.appendChild(btnRow);
 }
 
 async function eseguiAzione(id, op) {

@@ -75,20 +75,18 @@ export async function caricaTuttiDatiAdmin() {
     ]);
 }
 
-/* --- INBOX --- */
+/* --- INBOX (HUMAN-IN-THE-LOOP) --- */
 export async function sincronizzaInbox() {
     const tbody = document.getElementById('tbody_inbox');
     const btn = document.getElementById('btn_sync_inbox');
     btn.disabled = true;
     btn.textContent = '⏳ Sincronizzazione...';
-    tbody.innerHTML = '<tr><td colspan="4">Lettura e smistamento AI in corso...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">Lettura email e preparazione bozze AI in corso...</td></tr>';
 
     try {
         const res = await apiFetch('/api/v1/amministrazione/inbox', {}, true);
         tbody.innerHTML = '';
         const lista = res.dati || [];
-        memoriaVerbali = lista;
-        renderArchivioVerbali();
 
         if (!lista.length) {
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Nessuna email trovata.</td></tr>';
@@ -97,6 +95,7 @@ export async function sincronizzaInbox() {
 
         lista.forEach(e => {
             const tr = document.createElement('tr');
+            const stato = (e.stato_ai || 'SOLO_VISIONE').toUpperCase();
 
             const td1 = document.createElement('td');
             const strong = document.createElement('strong');
@@ -108,14 +107,115 @@ export async function sincronizzaInbox() {
 
             const td2 = document.createElement('td');
             const badge = document.createElement('span');
-            badge.className = `badge ${e.stato_ai === 'ELABORATA' ? 'badge-ok' : 'badge-warn'}`;
-            badge.textContent = e.reparto_ai || 'Autonomo';
+            const badgeCls = stato === 'ELABORATA'
+                ? 'badge-ok'
+                : (stato === 'RIFIUTATA' || stato === 'ERRORE' ? 'badge-err' : 'badge-warn');
+            badge.className = `badge ${badgeCls}`;
+            badge.textContent = `${stato} · ${e.reparto_ai || 'Autonomo'}`;
             td2.appendChild(badge);
 
             const td3 = document.createElement('td');
-            td3.textContent = (e.risposta_ai || '').slice(0, 160);
+            td3.style.cssText = 'max-width:420px;';
+            const txtDiv = document.createElement('div');
+            txtDiv.style.cssText = 'white-space:pre-wrap; font-size:0.85rem;';
+            txtDiv.textContent = e.risposta_ai || '';
+
+            const editArea = document.createElement('textarea');
+            editArea.className = 'hidden';
+            editArea.rows = 5;
+            editArea.style.cssText = 'width:100%; margin-top:8px; font-size:0.85rem;';
+            editArea.value = e.risposta_ai || '';
+
+            const bRegen = document.createElement('button');
+            bRegen.className = 'btn btn-sm hidden';
+            bRegen.style.marginTop = '6px';
+            bRegen.textContent = '✨ Rigenera con AI';
+            bRegen.onclick = async () => {
+                const note = editArea.value.trim();
+                if (!note) return alert('Scrivi almeno una nota o istruzione da cui rigenerare la risposta.');
+                bRegen.disabled = true;
+                bRegen.textContent = '⏳ Rigenerazione...';
+                try {
+                    const r = await apiFetch(`/api/v1/amministrazione/inbox/${encodeURIComponent(e.id)}/rigenera`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            mittente: e.mittente,
+                            oggetto: e.oggetto || '',
+                            testo_email: e.testo || '',
+                            istruzioni_utente: note
+                        })
+                    }, true);
+                    editArea.value = r.risposta_ai;
+                    txtDiv.textContent = r.risposta_ai;
+                    e.risposta_ai = r.risposta_ai;
+                } catch (err) {
+                    alert(`Errore rigenerazione: ${err.message}`);
+                } finally {
+                    bRegen.disabled = false;
+                    bRegen.textContent = '✨ Rigenera con AI';
+                }
+            };
+
+            td3.append(txtDiv, editArea, bRegen);
 
             const td4 = document.createElement('td');
+            td4.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap; align-items:flex-start;';
+
+            if (stato === 'DA_CONFERMARE' || stato === 'ERRORE') {
+                const bEdit = document.createElement('button');
+                bEdit.className = 'btn btn-sm';
+                bEdit.textContent = '✏️ Modifica';
+                bEdit.onclick = () => {
+                    const nascosta = editArea.classList.toggle('hidden');
+                    bRegen.classList.toggle('hidden', nascosta);
+                    txtDiv.classList.toggle('hidden', !nascosta);
+                    bEdit.textContent = nascosta ? '✏️ Modifica' : '👁️ Anteprima';
+                    bOk.textContent = nascosta ? '✔️ Approva & Esegui' : '📧 Invia Modificata';
+                };
+
+                const bOk = document.createElement('button');
+                bOk.className = 'btn btn-success btn-sm';
+                bOk.textContent = '✔️ Approva & Esegui';
+                bOk.onclick = async () => {
+                    bOk.disabled = true;
+                    bOk.textContent = '⏳ Invio...';
+                    const isModificata = !editArea.classList.contains('hidden');
+                    try {
+                        await apiFetch(`/api/v1/amministrazione/inbox/${encodeURIComponent(e.id)}/approva`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                mittente: e.mittente,
+                                oggetto: e.oggetto || '',
+                                testo_email: e.testo || '',
+                                risposta_modificata: isModificata ? editArea.value.trim() : null
+                            })
+                        }, true);
+                        await sincronizzaInbox();
+                        await Promise.allSettled([caricaTicket(), caricaFatture()]);
+                    } catch (err) {
+                        alert(`Errore esecuzione email: ${err.message}`);
+                        bOk.disabled = false;
+                        bOk.textContent = isModificata ? '📧 Invia Modificata' : '✔️ Approva & Esegui';
+                    }
+                };
+
+                const bNo = document.createElement('button');
+                bNo.className = 'btn btn-danger btn-sm';
+                bNo.textContent = '✖️ Rifiuta';
+                bNo.onclick = async () => {
+                    try {
+                        await apiFetch(`/api/v1/amministrazione/inbox/${encodeURIComponent(e.id)}/rifiuta`, {
+                            method: 'POST'
+                        }, true);
+                        await sincronizzaInbox();
+                    } catch (err) {
+                        alert(`Errore rifiuto email: ${err.message}`);
+                    }
+                };
+
+                td4.append(bEdit, bOk, bNo);
+            }
+
             const del = document.createElement('button');
             del.className = 'btn btn-danger btn-sm';
             del.textContent = '🗑️ Cestina';
@@ -189,6 +289,14 @@ export function renderTicket() {
         const tdAz = document.createElement('td');
         tdAz.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap;';
 
+        // Riga espandibile per bozza AI (HITL)
+        const trAi = document.createElement('tr');
+        trAi.className = 'hidden';
+        const tdAi = document.createElement('td');
+        tdAi.colSpan = 6;
+        tdAi.style.cssText = 'background:rgba(157,78,221,0.08); padding:14px; border-radius:8px;';
+        trAi.appendChild(tdAi);
+
         if (stato === 'APERTO') {
             const b1 = document.createElement('button');
             b1.className = 'btn btn-sm';
@@ -196,7 +304,31 @@ export function renderTicket() {
             b1.onclick = () => aggiornaTicket(t.codice_ticket, 'IN_LAVORAZIONE');
             tdAz.appendChild(b1);
         }
+
         if (stato !== 'CHIUSO') {
+            const bAi = document.createElement('button');
+            bAi.className = 'btn btn-primary btn-sm';
+            bAi.textContent = '🤖 Risolvi AI';
+            bAi.onclick = async () => {
+                bAi.disabled = true;
+                bAi.textContent = '⏳ Analisi...';
+                try {
+                    const res = await apiFetch(
+                        `/api/v1/amministrazione/ticket/${encodeURIComponent(t.codice_ticket)}/proponi-risoluzione`,
+                        { method: 'POST' },
+                        true
+                    );
+                    renderBozzaTicket(tdAi, trAi, t, res.dati);
+                    trAi.classList.remove('hidden');
+                } catch (err) {
+                    alert(`Errore agente supporto: ${err.message}`);
+                } finally {
+                    bAi.disabled = false;
+                    bAi.textContent = '🤖 Risolvi AI';
+                }
+            };
+            tdAz.appendChild(bAi);
+
             const b2 = document.createElement('button');
             b2.className = 'btn btn-success btn-sm';
             b2.textContent = '✔️ Chiudi';
@@ -240,8 +372,116 @@ export function renderTicket() {
 
         tdAz.append(bEdit, bDel);
         tr.append(tdPrio, tdStato, tdAz);
-        tbody.appendChild(tr);
+        tbody.append(tr, trAi);
     });
+}
+
+function renderBozzaTicket(container, rowEl, ticket, bozza) {
+    container.innerHTML = '';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const diag = document.createElement('div');
+    diag.style.cssText = 'font-size:0.85rem; white-space:pre-wrap; padding:10px; border-radius:8px; background:rgba(0,0,0,0.25);';
+    diag.textContent = `🔍 DIAGNOSI:\n${bozza.diagnosi || '-'}\n\n🛠️ PIANO D'AZIONE:\n${bozza.piano_azione || '-'}`;
+
+    const inOgg = document.createElement('input');
+    inOgg.type = 'text';
+    inOgg.value = bozza.oggetto_email || `[${ticket.codice_ticket}] Aggiornamento assistenza`;
+    inOgg.placeholder = 'Oggetto email al cliente';
+
+    const inRisp = document.createElement('textarea');
+    inRisp.rows = 5;
+    inRisp.value = bozza.risposta_cliente || '';
+    inRisp.placeholder = 'Testo risposta email al cliente...';
+
+    const selStato = document.createElement('select');
+    ['IN_LAVORAZIONE', 'CHIUSO'].forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = `Stato dopo commit: ${s.replace('_', ' ')}`;
+        if (s === (bozza.stato_suggerito || 'IN_LAVORAZIONE')) opt.selected = true;
+        selStato.appendChild(opt);
+    });
+
+    const inPrompt = document.createElement('textarea');
+    inPrompt.rows = 2;
+    inPrompt.placeholder = 'Istruzioni per rigenerare con AI (es. "chiedi i log di errore e lascia in lavorazione")...';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex; gap:8px; flex-wrap:wrap;';
+
+    const bRegen = document.createElement('button');
+    bRegen.className = 'btn btn-sm';
+    bRegen.textContent = '✨ Rigenera con AI';
+    bRegen.onclick = async () => {
+        const note = inPrompt.value.trim();
+        if (!note) return alert('Scrivi almeno una nota o istruzione per rigenerare.');
+        bRegen.disabled = true;
+        bRegen.textContent = '⏳ Rigenerazione...';
+        try {
+            const res = await apiFetch(
+                `/api/v1/amministrazione/ticket/${encodeURIComponent(ticket.codice_ticket)}/rigenera-risoluzione`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        istruzioni_utente: note,
+                        bozza_corrente: {
+                            diagnosi: bozza.diagnosi,
+                            piano_azione: bozza.piano_azione,
+                            oggetto_email: inOgg.value.trim(),
+                            risposta_cliente: inRisp.value.trim(),
+                            stato_suggerito: selStato.value,
+                        }
+                    })
+                },
+                true
+            );
+            renderBozzaTicket(container, rowEl, ticket, res.dati);
+        } catch (err) {
+            alert(`Errore rigenerazione: ${err.message}`);
+            bRegen.disabled = false;
+            bRegen.textContent = '✨ Rigenera con AI';
+        }
+    };
+
+    const bCommit = document.createElement('button');
+    bCommit.className = 'btn btn-success btn-sm';
+    bCommit.textContent = '✔️ Committa & Invia al Cliente';
+    bCommit.onclick = async () => {
+        bCommit.disabled = true;
+        bCommit.textContent = '⏳ Invio...';
+        try {
+            await apiFetch(
+                `/api/v1/amministrazione/ticket/${encodeURIComponent(ticket.codice_ticket)}/committa-risoluzione`,
+                {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        oggetto_email: inOgg.value.trim(),
+                        risposta_cliente: inRisp.value.trim(),
+                        nuovo_stato: selStato.value,
+                        invia_email_cliente: true,
+                    })
+                },
+                true
+            );
+            await caricaTicket();
+        } catch (err) {
+            alert(`Errore commit ticket: ${err.message}`);
+            bCommit.disabled = false;
+            bCommit.textContent = '✔️ Committa & Invia al Cliente';
+        }
+    };
+
+    const bClose = document.createElement('button');
+    bClose.className = 'btn btn-danger btn-sm';
+    bClose.textContent = '✖️ Chiudi bozza';
+    bClose.onclick = () => rowEl.classList.add('hidden');
+
+    btnRow.append(bRegen, bCommit, bClose);
+    box.append(diag, inOgg, inRisp, selStato, inPrompt, btnRow);
+    container.appendChild(box);
 }
 
 async function aggiornaTicket(codice, stato) {

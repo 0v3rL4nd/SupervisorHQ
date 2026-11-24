@@ -12,6 +12,11 @@ from src.agents.minutes_agent import (
     elabora_verbale,
     esegui_azione_verbale,
     verifica_slot_azione_verbale,
+    rigenera_azione_verbale,
+)
+from src.agents.ticket_resolution_agent import (
+    genera_bozza_risoluzione_ticket,
+    rigenera_bozza_risoluzione_ticket,
 )
 from src.core.security import crea_token, verifica_admin
 from src.core.google_auth import crea_url_autorizzazione, completa_autorizzazione
@@ -30,6 +35,13 @@ from src.core.database import (
     aggiorna_stato_azione_verbale,
     aggiorna_azione_verbale,
     elimina_verbale,
+)
+from src.tools.email_tools import (
+    leggi_email_non_lette,
+    leggi_tutte_le_email,
+    segna_email_come_letta,
+    elimina_email,
+    invia_email,
 )
 from src.tools.document_parser import estrai_testo_da_bytes
 from src.workflow.graph import compila_grafo_ufficio
@@ -158,6 +170,32 @@ def _utente_e_admin(username: str) -> bool:
     dip = ottieni_dipendente(username)
     return bool(dip and (dip.get("ruolo") == "ADMIN" or username == "admin"))
 
+class ApprovaEmailInboxRequest(BaseModel):
+    mittente: str
+    oggetto: str = ""
+    testo_email: str
+    risposta_modificata: str | None = None
+
+class RigeneraEmailInboxRequest(BaseModel):
+    mittente: str
+    oggetto: str = ""
+    testo_email: str
+    istruzioni_utente: str
+
+class RigeneraAzioneVerbaleRequest(BaseModel):
+    istruzioni_utente: str
+    payload: dict | None = None
+
+class RigeneraTicketRequest(BaseModel):
+    istruzioni_utente: str
+    bozza_corrente: dict
+
+
+class CommittaRisoluzioneTicketRequest(BaseModel):
+    oggetto_email: str
+    risposta_cliente: str
+    nuovo_stato: str = "CHIUSO"
+    invia_email_cliente: bool = True
 # ==========================================
 # 1. ROTTE PUBBLICHE (GUI, AUTH, PORTALE CLIENTI)
 # ==========================================
@@ -388,8 +426,68 @@ def api_elimina_ticket(codice_ticket: str, utente: str = Depends(verifica_admin)
         raise HTTPException(status_code=404, detail=f"Ticket {codice_ticket} non trovato.")
     return {"status": "ok", "messaggio": f"Ticket {codice_ticket} eliminato."}
 
+@app.post("/api/v1/amministrazione/ticket/{codice_ticket}/proponi-risoluzione")
+def api_proponi_risoluzione_ticket(codice_ticket: str, utente: str = Depends(verifica_admin)):
+    ticket = next((t for t in lista_tutti_ticket() if t["codice_ticket"] == codice_ticket), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket {codice_ticket} non trovato.")
+    try:
+        bozza = genera_bozza_risoluzione_ticket(ticket)
+        return {"status": "ok", "dati": bozza}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore analisi ticket: {str(e)}")
 
-# --- INBOX GMAIL & RISPOSTA AI ---
+
+@app.post("/api/v1/amministrazione/ticket/{codice_ticket}/rigenera-risoluzione")
+def api_rigenera_risoluzione_ticket(
+    codice_ticket: str,
+    req: RigeneraTicketRequest,
+    utente: str = Depends(verifica_admin),
+):
+    ticket = next((t for t in lista_tutti_ticket() if t["codice_ticket"] == codice_ticket), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket {codice_ticket} non trovato.")
+    if not req.istruzioni_utente.strip():
+        raise HTTPException(status_code=400, detail="Inserisci almeno un'istruzione per rigenerare.")
+    try:
+        bozza = rigenera_bozza_risoluzione_ticket(ticket, req.bozza_corrente, req.istruzioni_utente.strip())
+        return {"status": "ok", "dati": bozza}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore rigenerazione risoluzione: {str(e)}")
+
+
+@app.post("/api/v1/amministrazione/ticket/{codice_ticket}/committa-risoluzione")
+def api_committa_risoluzione_ticket(
+    codice_ticket: str,
+    req: CommittaRisoluzioneTicketRequest,
+    utente: str = Depends(verifica_admin),
+):
+    ticket = next((t for t in lista_tutti_ticket() if t["codice_ticket"] == codice_ticket), None)
+    if not ticket:
+        raise HTTPException(status_code=404, detail=f"Ticket {codice_ticket} non trovato.")
+    try:
+        esito_email = "Nessuna email inviata."
+        if req.invia_email_cliente and req.risposta_cliente.strip():
+            esito_email = invia_email(
+                destinatario=ticket["email_cliente"],
+                oggetto=req.oggetto_email.strip() or f"[{codice_ticket}] Aggiornamento assistenza",
+                corpo=req.risposta_cliente.strip(),
+                username=utente,
+            )
+        aggiorna_stato_ticket(codice_ticket, req.nuovo_stato.upper())
+        return {
+            "status": "ok",
+            "messaggio": f"Ticket {codice_ticket} aggiornato a {req.nuovo_stato.upper()}. {esito_email}",
+        }
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore commit risoluzione ticket: {str(e)}")
+
+# --- INBOX GMAIL & RISPOSTA AI (HUMAN-IN-THE-LOOP) ---
 @app.get("/api/v1/amministrazione/inbox")
 def get_posta_in_arrivo(utente: str = Depends(verifica_admin)):
     try:
@@ -404,35 +502,38 @@ def get_posta_in_arrivo(utente: str = Depends(verifica_admin)):
                 esito_ai = {
                     "stato_ai": "SOLO_VISIONE",
                     "reparto_ai": "Inviata / Già letta" if not email.get("in_arrivo") else "Già letta",
-                    "risposta_ai": "Visualizzata solo in lettura (nessuna risposta automatica).",
+                    "risposta_ai": "Visualizzata solo in lettura (nessuna azione richiesta).",
                 }
             else:
                 elaborata = ottieni_email_elaborata(utente, msg_id)
                 if not elaborata:
-                    print(f"🤖 [AUTO-LETTURA INBOX - {utente}] Elaborazione '{email['oggetto']}' da {email['mittente']}...")
-                    pratica = {
-                        "email_in_ingresso": f"Oggetto: {email['oggetto']}\n\n{email['testo']}",
-                        "mittente": email["mittente"],
-                        "storico_conversazione": [f"CLIENTE ({email['mittente']}): {email['testo']}"],
-                        "invia_email_finale": True,
-                    }
-                    config = {"configurable": {"thread_id": f"inbox_{utente}_{msg_id}"}}
-
+                    print(f"🛡️ [INBOX HITL - {utente}] Generazione bozza read-only per '{email['oggetto']}'...")
                     try:
-                        esito = ufficio.invoke(pratica, config=config)
-                        segna_email_come_letta(msg_id, username=utente)
-                        email["non_letta"] = False
+                        prompt_bozza = (
+                            "Sei l'assistente di smistamento di SupervisorHQ. "
+                            "Analizza questa email in arrivo SENZA eseguire azioni. "
+                            "Indica in 1 riga il reparto competente (Agenda, Supporto, Fatturazione, Commerciale) "
+                            "e proponi una breve bozza di risposta o azione da far confermare all'operatore umano.\n\n"
+                            f"MITTENTE: {email['mittente']}\n"
+                            f"OGGETTO: {email['oggetto']}\n"
+                            f"TESTO:\n{email['testo']}"
+                        )
+                        risp = ollama.chat(
+                            model="qwen2.5:14b",
+                            messages=[{"role": "user", "content": prompt_bozza}],
+                            options={"temperature": 0.1, "num_ctx": 8192},
+                        )
                         elaborata = {
-                            "stato_ai": "ELABORATA",
-                            "reparto_ai": esito.get("motivo_assegnazione", "Autonomo"),
-                            "risposta_ai": esito.get("risposta_coordinata", "Elaborazione completata."),
+                            "stato_ai": "DA_CONFERMARE",
+                            "reparto_ai": "In attesa di conferma umana",
+                            "risposta_ai": risp["message"]["content"].strip(),
                         }
                     except Exception as err:
                         traceback.print_exc()
                         elaborata = {
                             "stato_ai": "ERRORE",
-                            "reparto_ai": "Errore agente",
-                            "risposta_ai": f"Errore durante l'elaborazione: {err}",
+                            "reparto_ai": "Errore analisi bozza",
+                            "risposta_ai": f"Errore durante la generazione bozza: {err}",
                         }
 
                     salva_email_elaborata(
@@ -457,17 +558,95 @@ def get_posta_in_arrivo(utente: str = Depends(verifica_admin)):
         raise HTTPException(status_code=500, detail=f"Errore Gmail: {str(e)}")
 
 
-@app.delete("/api/v1/amministrazione/inbox/{msg_id}")
-def api_elimina_email(msg_id: str, utente: str = Depends(verifica_admin)):
+@app.post("/api/v1/amministrazione/inbox/{msg_id}/approva")
+def api_approva_email_inbox(
+    msg_id: str,
+    req: ApprovaEmailInboxRequest,
+    utente: str = Depends(verifica_admin),
+):
+    """Commit Human-in-the-Loop: invia la bozza modificata oppure esegue LangGraph sull'email approvata."""
     try:
-        elimina_email(msg_id, username=utente)
-        elimina_email_elaborata(utente, msg_id)
-        return {"status": "ok", "messaggio": "Email spostata nel cestino."}
+        if req.risposta_modificata and req.risposta_modificata.strip():
+            oggetto_re = req.oggetto if req.oggetto.lower().startswith("re:") else f"Re: {req.oggetto}"
+            esito_invio = invia_email(
+                destinatario=req.mittente,
+                oggetto=oggetto_re,
+                corpo=req.risposta_modificata.strip(),
+                username=utente,
+            )
+            segna_email_come_letta(msg_id, username=utente)
+            reparto = "Risposta manuale approvata"
+            risposta = f"{req.risposta_modificata.strip()}\n\n[{esito_invio}]"
+        else:
+            pratica = {
+                "email_in_ingresso": f"Oggetto: {req.oggetto}\n\n{req.testo_email}",
+                "mittente": req.mittente,
+                "storico_conversazione": [f"CLIENTE ({req.mittente}): {req.testo_email}"],
+                "invia_email_finale": True,
+            }
+            config = {"configurable": {"thread_id": f"inbox_{utente}_{msg_id}"}}
+            esito = ufficio.invoke(pratica, config=config)
+            segna_email_come_letta(msg_id, username=utente)
+            reparto = esito.get("motivo_assegnazione", "Autonomo")
+            risposta = esito.get("risposta_coordinata", "Elaborazione completata.")
+
+        salva_email_elaborata(utente, msg_id, "ELABORATA", reparto, risposta)
+        return {"status": "ok", "stato_ai": "ELABORATA", "reparto_ai": reparto, "risposta_ai": risposta}
     except PermissionError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore eliminazione email: {str(e)}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore esecuzione email: {str(e)}")
 
+@app.post("/api/v1/amministrazione/inbox/{msg_id}/rigenera")
+def api_rigenera_email_inbox(
+    msg_id: str,
+    req: RigeneraEmailInboxRequest,
+    utente: str = Depends(verifica_admin),
+):
+    """Rigenera la bozza di risposta usando le note/modifiche scritte dall'operatore prima del commit."""
+    try:
+        prompt = (
+            "Sei l'assistente di SupervisorHQ. Riscrivi una risposta email professionale, chiara e pronta "
+            "all'invio basandoti sull'email originale del mittente e integrando OBBLIGATORIAMENTE "
+            "le istruzioni o le modifiche scritte dall'operatore.\n"
+            "Restituisci SOLO il testo finale del corpo dell'email, senza premesse né commenti.\n\n"
+            f"MITTENTE ORIGINALE: {req.mittente}\n"
+            f"OGGETTO ORIGINALE: {req.oggetto}\n"
+            f"TESTO EMAIL ORIGINALE:\n{req.testo_email}\n\n"
+            f"ISTRUZIONI / BOZZA DELL'OPERATORE:\n{req.istruzioni_utente}"
+        )
+        risp = ollama.chat(
+            model="qwen2.5:14b",
+            messages=[{"role": "user", "content": prompt}],
+            options={"temperature": 0.2, "num_ctx": 8192},
+        )
+        nuova_bozza = risp["message"]["content"].strip()
+        salva_email_elaborata(
+            utente,
+            msg_id,
+            "DA_CONFERMARE",
+            "Bozza rigenerata (in attesa di conferma)",
+            nuova_bozza,
+        )
+        return {"status": "ok", "risposta_ai": nuova_bozza}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore rigenerazione bozza: {str(e)}")
+@app.post("/api/v1/amministrazione/inbox/{msg_id}/rifiuta")
+def api_rifiuta_email_inbox(msg_id: str, utente: str = Depends(verifica_admin)):
+    """Scarta la proposta AI senza eseguire nessun tool né inviare email."""
+    try:
+        salva_email_elaborata(
+            utente,
+            msg_id,
+            "RIFIUTATA",
+            "Scartata dall'operatore",
+            f"Azione bloccata manualmente da {utente} (nessun tool eseguito).",
+        )
+        return {"status": "ok", "messaggio": "Email rifiutata: nessuna azione eseguita."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Errore rifiuto email: {str(e)}")
 
 # --- CHAT ASSISTENTE INTERNO AI ---
 @app.post("/api/v1/amministrazione/chat")
@@ -543,6 +722,30 @@ def api_lista_verbali(utente: str = Depends(verifica_admin)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore lettura verbali: {str(e)}")
 
+@app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/rigenera")
+def api_rigenera_azione_verbale(
+    azione_id: int,
+    req: RigeneraAzioneVerbaleRequest,
+    utente: str = Depends(verifica_admin),
+):
+    if not req.istruzioni_utente.strip():
+        raise HTTPException(status_code=400, detail="Inserisci almeno una nota o istruzione per rigenerare.")
+    try:
+        res = rigenera_azione_verbale(
+            azione_id=azione_id,
+            istruzioni_utente=req.istruzioni_utente.strip(),
+            payload_corrente=req.payload,
+            username=utente,
+            is_admin=_utente_e_admin(utente),
+        )
+        return {"status": "ok", "dati": res}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Errore rigenerazione azione: {str(e)}")
 
 @app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/approva")
 def api_approva_azione_verbale(azione_id: int, utente: str = Depends(verifica_admin)):
@@ -583,19 +786,6 @@ async def api_verbale_da_file(file: UploadFile = File(...), utente: str = Depend
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Errore elaborazione file: {str(e)}")
-
-
-@app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/approva")
-def api_approva_azione_verbale(azione_id: int, utente: str = Depends(verifica_admin)):
-    try:
-        res = esegui_azione_verbale(azione_id, username=utente)
-        return {"status": "ok", "dati": res}
-    except (ValueError, PermissionError) as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Errore esecuzione azione: {str(e)}")
-
 
 @app.post("/api/v1/amministrazione/verbali/azioni/{azione_id}/rifiuta")
 def api_rifiuta_azione_verbale(azione_id: int, utente: str = Depends(verifica_admin)):
