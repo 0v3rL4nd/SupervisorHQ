@@ -1,0 +1,8 @@
+PIANO DI MIGRAZIONE INFRASTRUTTURA — Q4 2026
+Responsabile tecnico: Giulia Bianchi
+
+Obiettivi:
+- Spostare il database di produzione su cluster ridondato entro il 10 dicembre 2026.
+- Finestra di manutenzione prevista: sabato 5 dicembre dalle 02:00 alle 05:00 CET.
+- Rischi aperti: verificare compatibilità dei webhook di pagamento dopo il cambio IP.
+- Rollback automatico garantito entro 15 minuti in caso di anomalie.

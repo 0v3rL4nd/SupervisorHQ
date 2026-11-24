@@ -1,0 +1,11 @@
+LISTINO PREZZI UFFICIALE — SUPERVISORHQ 2026
+Valido fino al 31/12/2026
+
+1. Piano Starter (fino a 5 utenti): € 199 / mese
+   - Include: Inbox AI, Gestione Ticket, 10 GB archivio documenti.
+2. Piano Business (fino a 25 utenti): € 499 / mese
+   - Include: Tutto lo Starter + Workspace Verbali, Google Calendar Sync, Reportistica avanzata.
+3. Piano Enterprise (utenti illimitati): € 1.190 / mese
+   - Include: LLM dedicato on-premise, SLA 99.9%, supporto prioritario H24.
+
+Sconto annuale: 15% per pagamento in unica soluzione.
