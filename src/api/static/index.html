@@ -84,7 +84,7 @@
                 <button class="btn tab-btn" data-tab="tab_fatture">💰 Fatture</button>
                 <button class="btn tab-btn" data-tab="tab_catalogo">📦 Catalogo</button>
                 <button class="btn tab-btn" data-tab="tab_chat">🤖 Chat Interna</button>
-                <button class="btn tab-btn" data-tab="tab_verbali">📝 Verbali</button>
+                <a href="/verbali" class="btn tab-btn" style="text-decoration:none;">📝 Workspace Verbali ↗</a>
             </div>
 
             <!-- TAB INBOX -->
@@ -193,6 +193,37 @@
                 </div>
                 <button id="btn_analizza_verbale" class="btn btn-primary btn-sm" style="margin-bottom: 20px;">🤖 Analizza Verbale</button>
 
+                <!-- ARCHIVIO VERBALI CARICATI -->
+                <div style="margin: 24px 0;">
+                    <div class="card-header" style="padding-bottom: 10px; margin-bottom: 12px;">
+                        <h3 style="margin: 0; font-size: 1.05rem;">📚 Archivio Verbali Caricati</h3>
+                        <input type="text" id="filtro_verbali" placeholder="Cerca per titolo o fonte..." style="max-width: 240px;">
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Data</th>
+                                    <th>Titolo</th>
+                                    <th>Fonte</th>
+                                    <th>Autore</th>
+                                    <th>Azioni</th>
+                                    <th>Gestione</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody_archivio_verbali"></tbody>
+                        </table>
+                    </div>
+                    <div id="verbale_anteprima" class="glass hidden" style="margin-top: 12px; padding: 14px; border-radius: 10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <strong id="anteprima_titolo"></strong>
+                            <button id="btn_chiudi_anteprima" class="btn btn-sm">✕ Chiudi</button>
+                        </div>
+                        <pre id="anteprima_testo" style="white-space: pre-wrap; font-family: inherit; font-size: 0.88rem; color: var(--text-muted); margin: 0; max-height: 260px; overflow-y: auto;"></pre>
+                    </div>
+                </div>
+
+                <h3 style="margin: 0 0 12px 0; font-size: 1.05rem;">⚡ Azioni Estratte (Human-in-the-Loop)</h3>
                 <div id="lista_verbali" style="display: flex; flex-direction: column; gap: 16px;"></div>
             </div>
         </section>

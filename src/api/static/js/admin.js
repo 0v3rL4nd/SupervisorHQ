@@ -2,6 +2,7 @@ import { apiFetch, getToken } from './api.js';
 
 let memoriaTicket = [];
 let memoriaFatture = [];
+let memoriaVerbali = [];
 
 function aggiornaKPI() {
     const aperti = memoriaTicket.filter(t => (t.stato || '').toUpperCase() === 'APERTO').length;
@@ -86,6 +87,8 @@ export async function sincronizzaInbox() {
         const res = await apiFetch('/api/v1/amministrazione/inbox', {}, true);
         tbody.innerHTML = '';
         const lista = res.dati || [];
+        memoriaVerbali = lista;
+        renderArchivioVerbali();
 
         if (!lista.length) {
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Nessuna email trovata.</td></tr>';
@@ -426,7 +429,80 @@ export async function inviaChatInterna(testoOverride = null) {
     box.scrollTop = box.scrollHeight;
 }
 
-/* --- VERBALI DI RIUNIONE --- */
+/* --- VERBALI DI RIUNIONE (HUMAN-IN-THE-LOOP v2) --- */
+
+export function renderArchivioVerbali() {
+    const tbody = document.getElementById('tbody_archivio_verbali');
+    if (!tbody) return;
+    const q = (document.getElementById('filtro_verbali')?.value || '').trim().toLowerCase();
+    tbody.innerHTML = '';
+
+    const filtrati = memoriaVerbali.filter(v =>
+        (v.titolo || '').toLowerCase().includes(q) ||
+        (v.fonte || '').toLowerCase().includes(q) ||
+        (v.username_creatore || '').toLowerCase().includes(q)
+    );
+
+    if (!filtrati.length) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Nessun verbale in archivio.</td></tr>';
+        return;
+    }
+
+    filtrati.forEach(v => {
+        const tr = document.createElement('tr');
+        const azioni = v.azioni || [];
+        const eseguite = azioni.filter(a => a.stato === 'ESEGUITA').length;
+
+        const tdData = document.createElement('td');
+        tdData.textContent = (v.data_creazione || '').slice(0, 16).replace('T', ' ');
+
+        const tdTitolo = document.createElement('td');
+        tdTitolo.innerHTML = `<strong>${v.titolo}</strong>`;
+
+        const tdFonte = document.createElement('td');
+        tdFonte.innerHTML = `<span class="badge badge-warn">${v.fonte}</span>`;
+
+        const tdAutore = document.createElement('td');
+        tdAutore.textContent = v.username_creatore || '-';
+
+        const tdAzioni = document.createElement('td');
+        tdAzioni.textContent = `${eseguite}/${azioni.length} eseguite`;
+
+        const tdGest = document.createElement('td');
+        tdGest.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap;';
+
+        const bView = document.createElement('button');
+        bView.className = 'btn btn-sm';
+        bView.textContent = '👁️ Leggi';
+        bView.onclick = () => {
+            const box = document.getElementById('verbale_anteprima');
+            document.getElementById('anteprima_titolo').textContent = `📝 ${v.titolo} (${v.fonte})`;
+            document.getElementById('anteprima_testo').textContent = v.testo_originale || '(Testo non disponibile)';
+            box.classList.remove('hidden');
+            box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+
+        const bDel = document.createElement('button');
+        bDel.className = 'btn btn-danger btn-sm';
+        bDel.textContent = '🗑️';
+        bDel.title = 'Elimina verbale';
+        bDel.onclick = async () => {
+            if (!confirm(`Eliminare il verbale "${v.titolo}" e tutte le sue azioni?`)) return;
+            try {
+                await apiFetch(`/api/v1/amministrazione/verbali/${v.id}`, { method: 'DELETE' }, true);
+                document.getElementById('verbale_anteprima')?.classList.add('hidden');
+                await caricaVerbali();
+            } catch (err) {
+                alert(`Errore eliminazione verbale: ${err.message}`);
+            }
+        };
+
+        tdGest.append(bView, bDel);
+        tr.append(tdData, tdTitolo, tdFonte, tdAutore, tdAzioni, tdGest);
+        tbody.appendChild(tr);
+    });
+}
+
 export async function caricaVerbali() {
     const container = document.getElementById('lista_verbali');
     if (!container) return;
@@ -455,28 +531,68 @@ export async function caricaVerbali() {
             riep.textContent = v.riepilogo || '';
 
             const ul = document.createElement('div');
-            ul.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+            ul.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
 
             (v.azioni || []).forEach(a => {
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'padding:12px; background:rgba(255,255,255,0.03); border-radius:8px;';
+
                 const row = document.createElement('div');
-                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px; background:rgba(255,255,255,0.03); border-radius:8px; flex-wrap:wrap;';
+                row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;';
 
                 const info = document.createElement('div');
                 const badgeCls = a.stato === 'ESEGUITA' ? 'badge-ok' : (a.stato === 'DA_CONFERMARE' ? 'badge-warn' : 'badge-err');
                 info.innerHTML = `<span class="badge ${badgeCls}" style="margin-right:8px;">${a.tipo} · ${a.stato}</span><span>${a.descrizione}</span>`;
-                if (a.esito) {
-                    const esitoEl = document.createElement('div');
-                    esitoEl.style.cssText = 'font-size:0.8rem; color:var(--text-muted); margin-top:4px;';
-                    esitoEl.textContent = `Esito: ${a.esito}`;
-                    info.appendChild(esitoEl);
-                }
+
+                const statusLine = document.createElement('div');
+                statusLine.style.cssText = 'font-size:0.8rem; color:var(--text-muted); margin-top:4px;';
+                if (a.esito) statusLine.textContent = `Esito: ${a.esito}`;
+                info.appendChild(statusLine);
 
                 const actions = document.createElement('div');
-                actions.style.cssText = 'display:flex; gap:6px;';
-                if (a.stato === 'DA_CONFERMARE') {
+                actions.style.cssText = 'display:flex; gap:6px; flex-wrap:wrap;';
+
+                const editBox = document.createElement('div');
+                editBox.className = 'hidden';
+                editBox.style.cssText = 'margin-top:10px; padding-top:10px; border-top:1px solid rgba(255,255,255,0.1); display:flex; flex-direction:column; gap:8px;';
+
+                const modificabile = ['DA_CONFERMARE', 'CONFLITTO', 'ATTENZIONE', 'ERRORE'].includes(a.stato);
+                if (modificabile) {
+                    if (a.tipo === 'RIUNIONE') {
+                        const bCheck = document.createElement('button');
+                        bCheck.className = 'btn btn-sm';
+                        bCheck.textContent = '🔍 Verifica Slot';
+                        bCheck.onclick = async () => {
+                            bCheck.disabled = true;
+                            bCheck.textContent = '⏳ Controllo...';
+                            try {
+                                const chk = await apiFetch(`/api/v1/amministrazione/verbali/azioni/${a.id}/verifica-calendar`, {}, true);
+                                statusLine.textContent = chk.dati.messaggio;
+                                statusLine.style.color = chk.dati.libero ? 'var(--success, #00f5d4)' : 'var(--danger, #ff006e)';
+                            } catch (err) {
+                                statusLine.textContent = `Errore verifica: ${err.message}`;
+                            } finally {
+                                bCheck.disabled = false;
+                                bCheck.textContent = '🔍 Verifica Slot';
+                            }
+                        };
+                        actions.appendChild(bCheck);
+                    }
+
+                    const bEdit = document.createElement('button');
+                    bEdit.className = 'btn btn-sm';
+                    bEdit.textContent = '✏️ Modifica';
+                    bEdit.onclick = () => {
+                        editBox.classList.toggle('hidden');
+                        if (!editBox.dataset.built) {
+                            costruisciFormModificaInline(editBox, a);
+                            editBox.dataset.built = '1';
+                        }
+                    };
+
                     const bOk = document.createElement('button');
                     bOk.className = 'btn btn-success btn-sm';
-                    bOk.textContent = '✔️ Approva';
+                    bOk.textContent = a.tipo === 'EMAIL' ? '📧 Approva e Invia' : '✔️ Approva';
                     bOk.onclick = () => gestisciAzioneVerbale(a.id, 'approva');
 
                     const bNo = document.createElement('button');
@@ -484,11 +600,12 @@ export async function caricaVerbali() {
                     bNo.textContent = '✖️ Rifiuta';
                     bNo.onclick = () => gestisciAzioneVerbale(a.id, 'rifiuta');
 
-                    actions.append(bOk, bNo);
+                    actions.append(bEdit, bOk, bNo);
                 }
 
                 row.append(info, actions);
-                ul.appendChild(row);
+                wrapper.append(row, editBox);
+                ul.appendChild(wrapper);
             });
 
             card.append(header, riep, ul);
@@ -496,6 +613,98 @@ export async function caricaVerbali() {
         });
     } catch (err) {
         container.innerHTML = `<p style="color:var(--danger);">Errore caricamento verbali: ${err.message}</p>`;
+    }
+}
+
+function costruisciFormModificaInline(container, azione) {
+    const p = { ...(azione.payload || {}) };
+    container.innerHTML = '';
+
+    const creaCampo = (label, value, type = 'text') => {
+        const wrap = document.createElement('div');
+        const lbl = document.createElement('label');
+        lbl.textContent = label;
+        lbl.style.cssText = 'font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:4px;';
+        const el = type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
+        if (type !== 'textarea') el.type = type;
+        else el.rows = 3;
+        el.value = value ?? '';
+        wrap.append(lbl, el);
+        container.appendChild(wrap);
+        return el;
+    };
+
+    let raccogli = () => ({ descrizione: azione.descrizione, payload: p });
+
+    if (azione.tipo === 'RIUNIONE') {
+        const inTitolo = creaCampo('Titolo riunione', p.titolo || '');
+        const isoVal = (p.data_ora_iso || '').slice(0, 16);
+        const inData = creaCampo('Data e ora', isoVal, 'datetime-local');
+        const inDurata = creaCampo('Durata (minuti)', p.durata_minuti || 60, 'number');
+        const inPart = creaCampo('Partecipanti (email separate da virgola)', (p.partecipanti_email || []).join(', '));
+
+        raccogli = () => {
+            const nuovaIso = inData.value ? `${inData.value}:00` : null;
+            const emails = inPart.value.split(',').map(s => s.trim()).filter(Boolean);
+            return {
+                descrizione: `${p.is_rischedulazione ? 'Rischedula' : 'Schedula'}: ${inTitolo.value.trim()} (${nuovaIso || 'data da definire'})`,
+                payload: {
+                    ...p,
+                    titolo: inTitolo.value.trim(),
+                    data_ora_iso: nuovaIso,
+                    durata_minuti: parseInt(inDurata.value, 10) || 60,
+                    partecipanti_email: emails,
+                }
+            };
+        };
+    } else if (azione.tipo === 'EMAIL') {
+        const inDest = creaCampo('Destinatario (email)', p.destinatario || '', 'email');
+        const inOgg = creaCampo('Oggetto email', p.oggetto || '');
+        const inCorpo = creaCampo('Testo email', p.corpo || azione.descrizione, 'textarea');
+
+        raccogli = () => ({
+            descrizione: `Invia email a ${inDest.value.trim() || '(mancante)'}: ${inOgg.value.trim()}`,
+            payload: {
+                ...p,
+                destinatario: inDest.value.trim(),
+                oggetto: inOgg.value.trim(),
+                corpo: inCorpo.value.trim(),
+            }
+        });
+    } else {
+        const inDesc = creaCampo('Descrizione', azione.descrizione);
+        raccogli = () => ({
+            descrizione: inDesc.value.trim(),
+            payload: { ...p, descrizione: inDesc.value.trim() }
+        });
+    }
+
+    const btnSave = document.createElement('button');
+    btnSave.className = 'btn btn-primary btn-sm';
+    btnSave.style.alignSelf = 'flex-start';
+    btnSave.textContent = '💾 Salva modifiche';
+    btnSave.onclick = async () => {
+        try {
+            const body = raccogli();
+            await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azione.id}`, {
+                method: 'PUT',
+                body: JSON.stringify(body)
+            }, true);
+            await caricaVerbali();
+        } catch (err) {
+            alert(`Errore salvataggio modifiche: ${err.message}`);
+        }
+    };
+    container.appendChild(btnSave);
+}
+
+async function gestisciAzioneVerbale(azioneId, azione) {
+    try {
+        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azioneId}/${azione}`, { method: 'POST' }, true);
+        await caricaVerbali();
+        await caricaTicket();
+    } catch (err) {
+        alert(`Errore esecuzione azione: ${err.message}`);
     }
 }
 
@@ -550,12 +759,3 @@ export async function caricaFileVerbale() {
     }
 }
 
-async function gestisciAzioneVerbale(azioneId, azione) {
-    try {
-        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azioneId}/${azione}`, { method: 'POST' }, true);
-        await caricaVerbali();
-        await caricaTicket(); // aggiorna KPI se l'azione ha aperto un ticket
-    } catch (err) {
-        alert(`Errore esecuzione azione: ${err.message}`);
-    }
-}

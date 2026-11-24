@@ -3,7 +3,7 @@ import { caricaCatalogoClienti, inviaPraticaCliente } from './client.js';
 import {
     caricaTuttiDatiAdmin, sincronizzaInbox, caricaTicket, renderTicket,
     creaFattura, creaSoluzioneAdmin, inviaChatInterna, collegaGoogle,
-    caricaVerbali, inviaVerbaleTesto, caricaFileVerbale
+    caricaVerbali, renderArchivioVerbali, inviaVerbaleTesto, caricaFileVerbale
 } from './admin.js';
 
 function mostraVista(nome) {
@@ -64,5 +64,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn_refresh_verbali')?.addEventListener('click', caricaVerbali);
     document.getElementById('btn_analizza_verbale')?.addEventListener('click', inviaVerbaleTesto);
     document.getElementById('btn_upload_verbale')?.addEventListener('click', caricaFileVerbale);
+    document.getElementById('filtro_verbali')?.addEventListener('input', renderArchivioVerbali);
+    document.getElementById('btn_chiudi_anteprima')?.addEventListener('click', () => {
+        document.getElementById('verbale_anteprima')?.classList.add('hidden');
+    });
     document.querySelectorAll('.chip-chat').forEach(c => c.onclick = () => inviaChatInterna(c.dataset.q));
 });

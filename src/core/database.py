@@ -118,6 +118,26 @@ def inizializza_database():
                     )
                 """)
 
+        for col_sql in (
+                "ALTER TABLE verbali_azioni ADD COLUMN eseguito_da TEXT",
+                "ALTER TABLE verbali_azioni ADD COLUMN data_esecuzione TEXT",
+        ):
+            try:
+                conn.execute(col_sql)
+            except sqlite3.OperationalError:
+                pass  # colonna già esistente
+
+        for col_sql in (
+                "ALTER TABLE verbali_azioni ADD COLUMN eseguito_da TEXT",
+                "ALTER TABLE verbali_azioni ADD COLUMN data_esecuzione TEXT",
+                "ALTER TABLE verbali_azioni ADD COLUMN assegnatario_username TEXT",
+                "ALTER TABLE verbali_azioni ADD COLUMN agente_competente TEXT",
+        ):
+            try:
+                conn.execute(col_sql)
+            except sqlite3.OperationalError:
+                pass
+
         # Seed Dipendenti (solo se la tabella è vuota)
         cursor.execute("SELECT COUNT(*) FROM dipendenti")
         if cursor.fetchone()[0] == 0:
@@ -338,22 +358,25 @@ def salva_verbale_con_azioni(
         for az in azioni:
             conn.execute(
                 """
-                INSERT INTO verbali_azioni (verbale_id, tipo, descrizione, payload_json, stato)
-                VALUES (?, ?, ?, ?, 'DA_CONFERMARE')
+                INSERT INTO verbali_azioni
+                (verbale_id, tipo, descrizione, payload_json, stato, assegnatario_username, agente_competente)
+                VALUES (?, ?, ?, ?, 'DA_CONFERMARE', ?, ?)
                 """,
                 (
                     verbale_id,
                     az["tipo"],
                     az["descrizione"],
                     json.dumps(az.get("payload", {}), ensure_ascii=False),
+                    az.get("assegnatario_username") or username,
+                    az.get("agente_competente") or "AGENTE_OPERATIVO",
                 ),
             )
         conn.commit()
         return verbale_id
 
 
-def lista_verbali() -> list[dict]:
-    """Restituisce tutti i verbali con le relative azioni annidate."""
+def lista_verbali(username: str | None = None, is_admin: bool = False) -> list[dict]:
+    """Restituisce i verbali filtrando le azioni per assegnatario (admin vede tutto)."""
     with get_connection() as conn:
         verbali_rows = conn.execute(
             "SELECT * FROM verbali ORDER BY data_creazione DESC"
@@ -361,10 +384,23 @@ def lista_verbali() -> list[dict]:
         risultato = []
         for v in verbali_rows:
             v_dict = dict(v)
-            azioni_rows = conn.execute(
-                "SELECT * FROM verbali_azioni WHERE verbale_id = ? ORDER BY id ASC",
-                (v_dict["id"],),
-            ).fetchall()
+            if is_admin or not username:
+                azioni_rows = conn.execute(
+                    "SELECT * FROM verbali_azioni WHERE verbale_id = ? ORDER BY id ASC",
+                    (v_dict["id"],),
+                ).fetchall()
+            else:
+                azioni_rows = conn.execute(
+                    """
+                    SELECT * FROM verbali_azioni
+                    WHERE verbale_id = ? AND assegnatario_username = ?
+                    ORDER BY id ASC
+                    """,
+                    (v_dict["id"], username),
+                ).fetchall()
+                if not azioni_rows:
+                    continue  # nasconde i verbali in cui l'utente non ha compiti
+
             v_dict["azioni"] = [
                 {**dict(a), "payload": json.loads(a["payload_json"])}
                 for a in azioni_rows
@@ -385,11 +421,60 @@ def ottieni_azione_verbale(azione_id: int) -> Optional[dict]:
         return d
 
 
-def aggiorna_stato_azione_verbale(azione_id: int, stato: str, esito: str = "") -> bool:
+def aggiorna_stato_azione_verbale(
+    azione_id: int,
+    stato: str,
+    esito: str,
+    eseguito_da: str | None = None,
+) -> bool:
     with get_connection() as conn:
         cur = conn.execute(
-            "UPDATE verbali_azioni SET stato = ?, esito = ? WHERE id = ?",
-            (stato.upper(), esito, azione_id),
+            """
+            UPDATE verbali_azioni
+            SET stato = ?, esito = ?, eseguito_da = ?, data_esecuzione = datetime('now', 'localtime')
+            WHERE id = ?
+            """,
+            (stato, esito, eseguito_da, azione_id),
         )
+        conn.commit()
+        return cur.rowcount > 0
+
+def aggiorna_azione_verbale(
+    azione_id: int,
+    descrizione: str | None = None,
+    payload: dict | None = None,
+) -> bool:
+    """Aggiorna descrizione/payload di un'azione e la riporta in DA_CONFERMARE."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT descrizione, payload_json FROM verbali_azioni WHERE id = ?",
+            (azione_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        nuova_desc = descrizione if descrizione is not None else row["descrizione"]
+        nuovo_payload = (
+            json.dumps(payload, ensure_ascii=False)
+            if payload is not None
+            else row["payload_json"]
+        )
+
+        cur = conn.execute(
+            """
+            UPDATE verbali_azioni
+            SET descrizione = ?, payload_json = ?, stato = 'DA_CONFERMARE', esito = NULL
+            WHERE id = ?
+            """,
+            (nuova_desc, nuovo_payload, azione_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+def elimina_verbale(verbale_id: int) -> bool:
+    """Elimina un verbale e tutte le azioni collegate."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM verbali_azioni WHERE verbale_id = ?", (verbale_id,))
+        cur = conn.execute("DELETE FROM verbali WHERE id = ?", (verbale_id,))
         conn.commit()
         return cur.rowcount > 0

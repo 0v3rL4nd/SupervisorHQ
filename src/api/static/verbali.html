@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SupervisorHQ — Workspace Verbali</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .ws-grid { display: grid; grid-template-columns: 330px 1fr; gap: 20px; align-items: start; }
+        .ws-sidebar { position: sticky; top: 84px; max-height: calc(100vh - 110px); display: flex; flex-direction: column; gap: 12px; }
+        .ws-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; max-height: 62vh; padding-right: 4px; }
+        .ws-item { padding: 12px; border-radius: 10px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); cursor: pointer; transition: 0.15s; }
+        .ws-item:hover, .ws-item.active { border-color: var(--primary, #9d4edd); background: rgba(157,78,221,0.14); }
+        .preview-box { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(0,0,0,0.28); border-left: 3px solid var(--primary, #9d4edd); font-size: 0.84rem; color: var(--text-muted); white-space: pre-wrap; }
+        .subtabs { display: flex; gap: 8px; margin: 14px 0; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 10px; flex-wrap: wrap; }
+        .quick-links { display: flex; gap: 8px; flex-wrap: wrap; }
+        @media (max-width: 900px) { .ws-grid { grid-template-columns: 1fr; } .ws-sidebar { position: static; max-height: none; } }
+    </style>
+</head>
+<body>
+    <nav class="navbar glass">
+        <div class="brand">🛡️ Supervisor<span>HQ</span> · <small style="font-size:0.75rem; color:var(--text-muted);">Workspace Verbali</small></div>
+        <div class="nav-actions">
+            <a href="/" class="btn btn-sm" style="text-decoration:none;">⬅️ Dashboard</a>
+            <a href="https://calendar.google.com" target="_blank" class="btn btn-sm" style="text-decoration:none;">📅 Google Calendar</a>
+            <button id="btn_nuovo_verbale" class="btn btn-primary btn-sm">➕ Nuovo Verbale</button>
+            <button id="btn_toggle_docs" class="btn btn-sm">📁 Documenti</button>
+        </div>
+    </nav>
+
+    <main class="container" style="max-width: 1400px;">
+        <!-- PANNELLO COLLASSABILE NUOVO VERBALE -->
+        <section id="panel_nuovo" class="card glass hidden" style="margin-bottom: 20px;">
+            <div class="card-header">
+                <h2>➕ Carica o Incolla Nuovo Verbale</h2>
+                <button id="btn_chiudi_nuovo" class="btn btn-sm">✕ Chiudi</button>
+            </div>
+            <div class="form-row" style="align-items: center;">
+                <input type="file" id="ws_file" accept=".pdf,.docx,.txt,.md">
+                <button id="btn_ws_upload" class="btn btn-primary btn-sm" style="flex:0 0 auto;">📤 Carica File</button>
+            </div>
+            <div class="form-row">
+                <textarea id="ws_testo" rows="4" placeholder="Oppure incolla qui il testo del verbale di riunione..."></textarea>
+            </div>
+            <button id="btn_ws_analizza" class="btn btn-primary btn-sm">🤖 Analizza Verbale</button>
+        </section>
+
+        <!-- PANNELLO COLLASSABILE DOCUMENTI AZIENDALI -->
+        <section id="panel_docs" class="card glass hidden" style="margin-bottom: 20px;">
+            <div class="card-header">
+                <h2>📁 Documenti Aziendali (cartella <code>docs/</code>)</h2>
+                <button id="btn_chiudi_docs" class="btn btn-sm">✕ Chiudi</button>
+            </div>
+            <div class="form-row" style="align-items: center;">
+                <input type="file" id="doc_file" accept=".pdf,.docx,.txt,.md,.csv,.xlsx">
+                <button id="btn_doc_upload" class="btn btn-primary btn-sm" style="flex:0 0 auto;">📤 Carica in Archivio</button>
+            </div>
+            <div id="lista_docs" style="display:flex; flex-direction:column; gap:8px; margin-top:12px;"></div>
+        </section>
+
+        <!-- LAYOUT MASTER-DETAIL -->
+        <div class="ws-grid">
+            <!-- SIDEBAR ARCHIVIO -->
+            <aside class="card glass ws-sidebar">
+                <div class="card-header" style="margin-bottom: 4px;">
+                    <h3 style="margin:0;">📚 Archivio Verbali</h3>
+                    <button id="btn_ws_refresh" class="btn btn-sm">🔄</button>
+                </div>
+                <input type="text" id="ws_search" placeholder="Cerca titolo, fonte o autore...">
+                <select id="ws_filter">
+                    <option value="TUTTI">Tutti i verbali</option>
+                    <option value="SOSPESO">Con azioni da confermare</option>
+                    <option value="COMPLETATI">Completati</option>
+                </select>
+                <div id="ws_list" class="ws-list"></div>
+            </aside>
+
+            <!-- DETTAGLIO VERBALE -->
+            <section id="ws_detail" class="card glass">
+                <p style="color:var(--text-muted); text-align:center; padding:40px 0;">
+                    Seleziona un verbale dall'archivio a sinistra oppure clicca <strong>➕ Nuovo Verbale</strong>.
+                </p>
+            </section>
+        </div>
+    </main>
+
+    <script type="module" src="/static/js/verbali.js"></script>
+</body>
+</html>

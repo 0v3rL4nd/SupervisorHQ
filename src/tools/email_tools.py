@@ -2,6 +2,13 @@ import base64
 from email.mime.text import MIMEText
 from googleapiclient.discovery import build
 
+import mimetypes
+import os
+from email import encoders
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from src.core.google_auth import ottieni_credenziali_utente
 
 
@@ -61,17 +68,43 @@ def leggi_email_non_lette(username: str = "admin", limite: int = 5) -> list[dict
     return [e for e in tutte if e["in_arrivo"] and e["non_letta"]][:limite]
 
 
-def invia_email(destinatario: str, oggetto: str, corpo: str, username: str = "admin") -> str:
-    """Invia un'email dalla casella Gmail del dipendente specificato."""
+def invia_email(
+    destinatario: str,
+    oggetto: str,
+    corpo: str,
+    username: str = "admin",
+    allegati: list[str] | None = None,
+) -> str:
     service = _ottieni_servizio_gmail(username)
-    messaggio = MIMEText(corpo)
-    messaggio["to"] = destinatario
-    messaggio["subject"] = oggetto
-    raw = base64.urlsafe_b64encode(messaggio.as_bytes()).decode("utf-8")
 
-    service.users().messages().send(userId="me", body={"raw": raw}).execute()
-    return f"Email inviata con successo a {destinatario}."
+    if allegati:
+        msg = MIMEMultipart()
+        msg.attach(MIMEText(corpo, "plain", "utf-8"))
+        for path in allegati:
+            if not path or not os.path.isfile(path):
+                continue
+            ctype, _ = mimetypes.guess_type(path)
+            maintype, subtype = (ctype or "application/octet-stream").split("/", 1)
+            with open(path, "rb") as f:
+                part = MIMEBase(maintype, subtype)
+                part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header(
+                "Content-Disposition",
+                "attachment",
+                filename=os.path.basename(path),
+            )
+            msg.attach(part)
+    else:
+        msg = MIMEText(corpo, "plain", "utf-8")
 
+    msg["to"] = destinatario
+    msg["subject"] = oggetto
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+    inviata = service.users().messages().send(userId="me", body={"raw": raw}).execute()
+    extra = f" con {len(allegati)} allegato/i" if allegati else ""
+    return f"Email inviata{extra} (ID: {inviata.get('id')})"
 
 def segna_email_come_letta(msg_id: str, username: str = "admin") -> bool:
     """Rimuove l'etichetta UNREAD su Gmail per evitare doppie elaborazioni."""
