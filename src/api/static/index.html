@@ -176,6 +176,49 @@
                 </div>
             </div>
 
+            <!-- DASHBOARD SICUREZZA -->
+            <section class="glass" style="padding:20px; border-radius:14px; margin-top:20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; flex-wrap:wrap; gap:8px;">
+                <h3>🛡️ Sicurezza & Audit Log (Mini-SIEM)</h3>
+                <div style="display:flex; gap:8px;">
+                    <button id="btn_export_audit_csv" class="btn btn-sm">📥 CSV</button>
+                    <button id="btn_export_audit_json" class="btn btn-sm">📥 JSON</button>
+                    <button id="btn_refresh_audit" class="btn btn-sm">🔄 Aggiorna Log</button>
+                </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px;">
+                <div class="glass" style="padding:12px; border-radius:10px;">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">EVENTI INTERCETTATI</div>
+                    <strong id="kpi_sec_totale" style="font-size:1.4rem;">0</strong>
+                </div>
+                <div class="glass" style="padding:12px; border-radius:10px;">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">RISCHIO ALTO</div>
+                    <strong id="kpi_sec_alto" style="font-size:1.4rem; color:var(--danger, #ff006e);">0</strong>
+                </div>
+                <div class="glass" style="padding:12px; border-radius:10px;">
+                    <div style="font-size:0.75rem; color:var(--text-muted);">VIOLAZIONI DLP</div>
+                    <strong id="kpi_sec_dlp" style="font-size:1.4rem; color:var(--warning, #ffbe0b);">0</strong>
+                </div>
+            </div>
+
+            <div style="overflow-x:auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Modulo</th>
+                            <th>Rischio</th>
+                            <th>Contesto</th>
+                            <th>Dettaglio</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody_audit_sicurezza">
+                        <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Caricamento...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
             <!-- TAB VERBALI -->
             <div id="tab_verbali" class="card glass admin-panel hidden">
                 <div class="card-header">

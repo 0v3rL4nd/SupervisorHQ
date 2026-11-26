@@ -71,7 +71,8 @@ export async function caricaTuttiDatiAdmin() {
         caricaTicket(),
         caricaFatture(),
         caricaCatalogoAdmin(),
-        caricaVerbali()
+        caricaVerbali(),
+        caricaAuditSicurezza()
     ]);
 }
 
@@ -784,6 +785,17 @@ export async function caricaVerbali() {
                 const badgeCls = a.stato === 'ESEGUITA' ? 'badge-ok' : (a.stato === 'DA_CONFERMARE' ? 'badge-warn' : 'badge-err');
                 info.innerHTML = `<span class="badge ${badgeCls}" style="margin-right:8px;">${a.tipo} · ${a.stato}</span><span>${a.descrizione}</span>`;
 
+                const r = a.rischio || { livello: 'BASSO', motivi: [] };
+                const riskCls = r.livello === 'ALTO' ? 'badge-err' : (r.livello === 'MEDIO' ? 'badge-warn' : 'badge-ok');
+                const riskIcon = r.livello === 'ALTO' ? '🔴' : (r.livello === 'MEDIO' ? '🟡' : '🟢');
+
+                const riskBadge = document.createElement('span');
+                riskBadge.className = `badge ${riskCls}`;
+                riskBadge.style.marginRight = '8px';
+                riskBadge.title = (r.motivi || []).join(' ');
+                riskBadge.textContent = `${riskIcon} RISCHIO ${r.livello}`;
+                info.prepend(riskBadge);
+
                 const statusLine = document.createElement('div');
                 statusLine.style.cssText = 'font-size:0.8rem; color:var(--text-muted); margin-top:4px;';
                 if (a.esito) statusLine.textContent = `Esito: ${a.esito}`;
@@ -833,7 +845,7 @@ export async function caricaVerbali() {
                     const bOk = document.createElement('button');
                     bOk.className = 'btn btn-success btn-sm';
                     bOk.textContent = a.tipo === 'EMAIL' ? '📧 Approva e Invia' : '✔️ Approva';
-                    bOk.onclick = () => gestisciAzioneVerbale(a.id, 'approva');
+                    bOk.onclick = () => gestisciAzioneVerbale(a, 'approva');
 
                     const bNo = document.createElement('button');
                     bNo.className = 'btn btn-danger btn-sm';
@@ -938,11 +950,29 @@ function costruisciFormModificaInline(container, azione) {
     container.appendChild(btnSave);
 }
 
-async function gestisciAzioneVerbale(azioneId, azione) {
+async function gestisciAzioneVerbale(azioneObj, azione) {
+    let body = {};
+
+    if (azione === 'approva' && azioneObj.rischio?.richiede_doppia_conferma) {
+        const motivi = (azioneObj.rischio.motivi || []).join('\n- ');
+        const motivo = prompt(
+            `⚠️ AZIONE AD ALTO RISCHIO\n- ${motivi}\n\nInserisci un breve motivo (min. 5 caratteri) per confermare il commit:`
+        );
+        if (motivo === null) return; // Annullato dall'operatore
+        if (motivo.trim().length < 5) {
+            return alert('Conferma annullata: inserisci un motivo di almeno 5 caratteri.');
+        }
+        body = { conferma_critica: true, motivo_conferma: motivo.trim() };
+    }
+
     try {
-        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azioneId}/${azione}`, { method: 'POST' }, true);
+        await apiFetch(`/api/v1/amministrazione/verbali/azioni/${azioneObj.id}/${azione}`, {
+            method: 'POST',
+            body: JSON.stringify(body)
+        }, true);
         await caricaVerbali();
         await caricaTicket();
+        await caricaAuditSicurezza();
     } catch (err) {
         alert(`Errore esecuzione azione: ${err.message}`);
     }
@@ -999,3 +1029,75 @@ export async function caricaFileVerbale() {
     }
 }
 
+/* --- SICUREZZA & AUDIT LOG --- */
+export async function caricaAuditSicurezza() {
+    const tbody = document.getElementById('tbody_audit_sicurezza');
+    if (!tbody) return;
+
+    try {
+        const res = await apiFetch('/api/v1/amministrazione/sicurezza/audit?limite=30', {}, true);
+        const kpi = res.kpi || {};
+        document.getElementById('kpi_sec_totale').textContent = kpi.totale_eventi ?? 0;
+        document.getElementById('kpi_sec_alto').textContent = kpi.rischio_alto ?? 0;
+        document.getElementById('kpi_sec_dlp').textContent = kpi.violazioni_dlp ?? 0;
+
+        const lista = res.dati || [];
+        tbody.innerHTML = '';
+        if (!lista.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text-muted);">Nessun evento di sicurezza registrato.</td></tr>';
+            return;
+        }
+
+        lista.forEach(ev => {
+            const tr = document.createElement('tr');
+            const cls = ev.livello_rischio === 'ALTO' ? 'badge-err' : (ev.livello_rischio === 'MEDIO' ? 'badge-warn' : 'badge-ok');
+
+            const tdTs = document.createElement('td');
+            tdTs.style.whiteSpace = 'nowrap';
+            tdTs.textContent = ev.timestamp;
+
+            const tdMod = document.createElement('td');
+            tdMod.innerHTML = `<span class="badge badge-warn">${ev.modulo}</span>`;
+
+            const tdRisk = document.createElement('td');
+            tdRisk.innerHTML = `<span class="badge ${cls}">${ev.livello_rischio} · ${ev.azione}</span>`;
+
+            const tdCtx = document.createElement('td');
+            tdCtx.textContent = ev.contesto || ev.utente_o_mittente || '-';
+
+            const tdDet = document.createElement('td');
+            tdDet.style.fontSize = '0.85rem';
+            tdDet.textContent = ev.dettaglio || '';
+
+            tr.append(tdTs, tdMod, tdRisk, tdCtx, tdDet);
+            tbody.appendChild(tr);
+        });
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="5" style="color:var(--danger);">Errore audit log: ${err.message}</td></tr>`;
+    }
+}
+
+export async function esportaAuditSicurezza(formato = 'csv') {
+    try {
+        const token = getToken() || '';
+        const res = await fetch(`/api/v1/amministrazione/sicurezza/audit/export?formato=${encodeURIComponent(formato)}`, {
+            headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `Errore HTTP ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `supervisorhq_audit.${formato}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    } catch (err) {
+        alert(`Errore esportazione audit (${formato.toUpperCase()}): ${err.message}`);
+    }
+}

@@ -3,7 +3,8 @@ import { caricaCatalogoClienti, inviaPraticaCliente } from './client.js';
 import {
     caricaTuttiDatiAdmin, sincronizzaInbox, caricaTicket, renderTicket,
     creaFattura, creaSoluzioneAdmin, inviaChatInterna, collegaGoogle,
-    caricaVerbali, renderArchivioVerbali, inviaVerbaleTesto, caricaFileVerbale
+    caricaVerbali, renderArchivioVerbali, inviaVerbaleTesto, caricaFileVerbale,
+    caricaAuditSicurezza, esportaAuditSicurezza
 } from './admin.js';
 
 function mostraVista(nome) {
@@ -65,6 +66,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn_analizza_verbale')?.addEventListener('click', inviaVerbaleTesto);
     document.getElementById('btn_upload_verbale')?.addEventListener('click', caricaFileVerbale);
     document.getElementById('filtro_verbali')?.addEventListener('input', renderArchivioVerbali);
+    document.getElementById('btn_refresh_audit')?.addEventListener('click', caricaAuditSicurezza);
+    document.getElementById('btn_export_audit_csv')?.addEventListener('click', () => esportaAuditSicurezza('csv'));
+document.getElementById('btn_export_audit_json')?.addEventListener('click', () => esportaAuditSicurezza('json'));
     document.getElementById('btn_chiudi_anteprima')?.addEventListener('click', () => {
         document.getElementById('verbale_anteprima')?.classList.add('hidden');
     });

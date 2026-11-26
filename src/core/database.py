@@ -5,8 +5,8 @@ import os
 import sqlite3
 from typing import Optional
 
-DB_PATH = os.getenv("SUPERVISOR_DB_PATH", "supervisorhq.db")
-
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.getenv("SUPERVISOR_DB_PATH", os.path.join(BASE_DIR, "supervisorhq.db"))
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -117,6 +117,38 @@ def inizializza_database():
                        ) ON DELETE CASCADE
                     )
                 """)
+        cursor.execute("""
+                       CREATE TABLE IF NOT EXISTS security_audit_log
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           timestamp
+                           TEXT
+                           NOT
+                           NULL,
+                           modulo
+                           TEXT
+                           NOT
+                           NULL, -- FIREWALL_INPUT, OUTPUT_DLP, SANDBOX, HITL
+                           livello_rischio
+                           TEXT
+                           NOT
+                           NULL, -- BASSO, MEDIO, ALTO
+                           azione
+                           TEXT
+                           NOT
+                           NULL, -- BLOCCATO, REDATTO, RIFIUTATO
+                           utente_o_mittente
+                           TEXT,
+                           contesto
+                           TEXT,
+                           dettaglio
+                           TEXT
+                       )
+                       """)
 
         for col_sql in (
                 "ALTER TABLE verbali_azioni ADD COLUMN eseguito_da TEXT",
@@ -478,3 +510,75 @@ def elimina_verbale(verbale_id: int) -> bool:
         cur = conn.execute("DELETE FROM verbali WHERE id = ?", (verbale_id,))
         conn.commit()
         return cur.rowcount > 0
+
+def registra_evento_sicurezza(
+    modulo: str,
+    livello_rischio: str,
+    azione: str,
+    dettaglio: str,
+    utente_o_mittente: str = "sistema",
+    contesto: str = "",
+) -> None:
+    """Registra un evento di sicurezza nella tabella security_audit_log."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    conn = get_connection()
+    try:
+        ts = datetime.now(ZoneInfo("Europe/Rome")).strftime("%Y-%m-%d %H:%M:%S")
+        conn.execute(
+            """
+            INSERT INTO security_audit_log
+                (timestamp, modulo, livello_rischio, azione, utente_o_mittente, contesto, dettaglio)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                modulo.upper(),
+                livello_rischio.upper(),
+                azione.upper(),
+                utente_o_mittente,
+                contesto,
+                dettaglio[:500],
+            ),
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"⚠️ [AUDIT LOG] Impossibile scrivere evento su SQLite: {e}")
+    finally:
+        conn.close()
+
+
+def lista_eventi_sicurezza(limite: int = 50) -> list[dict]:
+    """Restituisce gli ultimi eventi di sicurezza in ordine cronologico inverso."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, modulo, livello_rischio, azione,
+                   utente_o_mittente, contesto, dettaglio
+            FROM security_audit_log
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limite,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def statistiche_sicurezza() -> dict:
+    """Calcola i KPI rapidi per la mini-dashboard sicurezza."""
+    conn = get_connection()
+    try:
+        totale = conn.execute("SELECT COUNT(*) FROM security_audit_log").fetchone()[0]
+        alto = conn.execute(
+            "SELECT COUNT(*) FROM security_audit_log WHERE livello_rischio = 'ALTO'"
+        ).fetchone()[0]
+        dlp = conn.execute(
+            "SELECT COUNT(*) FROM security_audit_log WHERE modulo = 'OUTPUT_DLP'"
+        ).fetchone()[0]
+        return {"totale_eventi": totale, "rischio_alto": alto, "violazioni_dlp": dlp}
+    finally:
+        conn.close()
